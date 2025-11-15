@@ -1825,6 +1825,110 @@ async def harvest_and_replant(websocket, slot_data, species):
     return True
 
 
+async def find_and_harvest(websocket, slot_data, species, mode="highest", min_mutations=None):
+    """Find and harvest a plant of the specified species based on mutation priority
+
+    Args:
+        websocket: WebSocket connection
+        slot_data: Player's slot data containing garden and inventory
+        species: Plant species to find and harvest
+        mode: "lowest" to prioritize lowest mutation count (for pet feeding)
+              "highest" to prioritize highest mutation count (for auto-harvesting/selling)
+        min_mutations: Minimum mutation count required to harvest (default: use harvest_config value)
+                      Set to 0 for pet feeding to harvest any mature plant
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import time
+
+    current_time = int(time.time() * 1000)
+
+    garden_data = slot_data.get("garden", {})
+    tile_objects = garden_data.get("tileObjects", {})
+
+    # Get min mutations required for harvest
+    if min_mutations is None:
+        min_mutations = 3
+        if harvest_config:
+            min_mutations = harvest_config.get("min_mutations", 3)
+
+    # Find ALL harvestable plants of the specified species
+    harvestable_plants = []
+
+    for tile_id, tile_obj in tile_objects.items():
+        if not tile_obj or tile_obj.get("objectType") != "plant":
+            continue
+
+        slots = tile_obj.get("slots", [])
+        for slot_index, plant_slot in enumerate(slots):
+            if not plant_slot:
+                continue
+
+            plant_species = plant_slot.get("species")
+            end_time = plant_slot.get("endTime", 0)
+            mutations = plant_slot.get("mutations", [])
+
+            # Check if this plant matches species and is ready to harvest
+            if (
+                plant_species == species
+                and current_time >= end_time
+                and len(mutations) >= min_mutations
+            ):
+                harvestable_plants.append({
+                    "tile_id": int(tile_id),
+                    "slot_index": slot_index,
+                    "mutation_count": len(mutations),
+                    "mutations": mutations
+                })
+
+    if not harvestable_plants:
+        return False
+
+    # Sort based on mode
+    if mode == "lowest":
+        # Sort by lowest mutation count first (for pet feeding)
+        harvestable_plants.sort(key=lambda x: x["mutation_count"])
+        priority_msg = "lowest"
+    else:
+        # Sort by highest mutation count first (for auto-harvesting/selling)
+        harvestable_plants.sort(key=lambda x: x["mutation_count"], reverse=True)
+        priority_msg = "highest"
+
+    # Get the best match based on priority
+    chosen_plant = harvestable_plants[0]
+    tile_slot = chosen_plant["tile_id"]
+    slots_index = chosen_plant["slot_index"]
+    mutation_count = chosen_plant["mutation_count"]
+
+    print(f"🌾 Found harvestable {species} at slot {tile_slot} (mutations: {mutation_count}, priority: {priority_msg})")
+
+    # Harvest the crop
+    harvest_message = {
+        "scopePath": ["Room", "Quinoa"],
+        "type": "HarvestCrop",
+        "slot": tile_slot,
+        "slotsIndex": slots_index,
+    }
+    await send_message(websocket, harvest_message)
+    print(f"✂️  Harvested {species} from slot {tile_slot}")
+
+    # Wait a moment for the harvest to process
+    await asyncio.sleep(0.3)
+
+    # Replant the same species
+    plant_message = {
+        "scopePath": ["Room", "Quinoa"],
+        "type": "PlantSeed",
+        "slot": tile_slot,
+        "species": species,
+    }
+    await send_message(websocket, plant_message)
+    print(f"🌱 Replanted {species} in slot {tile_slot}")
+
+    return True
+
+
 async def feed_hungry_pets(websocket):
     """Check for hungry pets and feed them with appropriate produce"""
     if not game_state["full_state"]:
@@ -1909,13 +2013,15 @@ async def feed_hungry_pets(websocket):
                     del produce_by_species[required_food]
             else:
                 # No produce available - try to harvest and replant
+                # Use mode="lowest" to prioritize plants with lowest mutation count for pet feeding
+                # Use min_mutations=0 to accept any mature plant regardless of mutation count
                 print(
                     f"⚠️  {pet_species} is hungry but no {required_food} available in inventory"
                 )
-                print(f"🔍 Searching for harvestable {required_food}...")
+                print(f"🔍 Searching for harvestable {required_food} (prioritizing lowest mutations for pet feeding)...")
 
-                success = await harvest_and_replant(
-                    websocket, slot_data, required_food
+                success = await find_and_harvest(
+                    websocket, slot_data, required_food, mode="lowest", min_mutations=0
                 )
 
                 if success:
