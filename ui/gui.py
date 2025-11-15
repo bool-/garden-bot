@@ -663,11 +663,11 @@ class MagicGardenGUI:
                             width=1,
                         )
 
-                    # Check for Dawnlit/Amberlit states (bottom indicator)
+                    # Check for Dawnlit/Ambershine states (bottom indicator)
                     light_state = None
                     light_color = None
-                    if "Amberlit" in mutations:
-                        light_state = "Amberlit"
+                    if "Ambershine" in mutations:
+                        light_state = "Ambershine"
                         light_color = "#FFAB00"  # Amber/golden
                     elif "Dawnlit" in mutations:
                         light_state = "Dawnlit"
