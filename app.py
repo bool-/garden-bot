@@ -7,13 +7,11 @@ Main application that orchestrates the bot, automation tasks, and GUI.
 import asyncio
 import argparse
 import threading
-import tkinter as tk
 
 from config import load_config
 from game_state import GameState
 from network.client import MagicGardenClient
 from automation import harvest, pets, shop
-from ui.gui import MagicGardenGUI
 
 
 def parse_args():
@@ -82,7 +80,11 @@ def main():
         print("Running in headless mode (no GUI)")
         asyncio.run(run_bot(config, game_state, headless=True))
     else:
-        # GUI mode - run websocket in thread
+        # GUI mode - import tkinter and GUI (only when needed)
+        import tkinter as tk
+        from ui.gui import MagicGardenGUI
+
+        # Run websocket in thread
         def run_websocket_thread():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
