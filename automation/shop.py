@@ -124,7 +124,20 @@ async def check_and_buy_from_shop(
         print(f"   Purchasing {stock}x {species} seeds...")
 
         # Buy all available stock
+        purchased_count = 0
         for i in range(stock):
+            # Re-check balance before each purchase
+            our_slot = game_state.get_player_slot()
+            if our_slot:
+                slot_data = our_slot.get("data", {})
+                current_coins = slot_data.get("coinsCount", 0)
+
+                if current_coins <= min_coins:
+                    print(
+                        f"   Stopped at {purchased_count}/{stock} {species} - balance {current_coins:,} at or below reserve {min_coins:,}"
+                    )
+                    break
+
             buy_message = {
                 "type": "PurchaseSeed",
                 "species": species,
@@ -156,10 +169,14 @@ async def check_and_buy_from_shop(
 
             game_state.update_full_state_locked(update_seed_stock)
 
+            purchased_count += 1
             items_bought += 1
             await asyncio.sleep(0.1)  # Small delay between purchases
 
-        print(f"   Bought {stock}x {species} seeds")
+        if purchased_count == stock:
+            print(f"   Bought {stock}x {species} seeds")
+        elif purchased_count > 0:
+            print(f"   Bought {purchased_count}x {species} seeds (stopped early)")
 
     # Buy all configured eggs
     for egg_item in eggs_to_buy:
@@ -169,7 +186,20 @@ async def check_and_buy_from_shop(
         print(f"   Purchasing {stock}x {egg_id}...")
 
         # Buy all available stock
+        purchased_count = 0
         for i in range(stock):
+            # Re-check balance before each purchase
+            our_slot = game_state.get_player_slot()
+            if our_slot:
+                slot_data = our_slot.get("data", {})
+                current_coins = slot_data.get("coinsCount", 0)
+
+                if current_coins <= min_coins:
+                    print(
+                        f"   Stopped at {purchased_count}/{stock} {egg_id} - balance {current_coins:,} at or below reserve {min_coins:,}"
+                    )
+                    break
+
             buy_message = {
                 "type": "PurchaseEgg",
                 "eggId": egg_id,
@@ -201,10 +231,14 @@ async def check_and_buy_from_shop(
 
             game_state.update_full_state_locked(update_egg_stock)
 
+            purchased_count += 1
             items_bought += 1
             await asyncio.sleep(0.1)  # Small delay between purchases
 
-        print(f"   Bought {stock}x {egg_id}")
+        if purchased_count == stock:
+            print(f"   Bought {stock}x {egg_id}")
+        elif purchased_count > 0:
+            print(f"   Bought {purchased_count}x {egg_id} (stopped early)")
 
     # Summary
     if total_items_in_stock == 0:

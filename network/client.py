@@ -23,7 +23,7 @@ from network.protocol import (
     is_player_in_room_state,
     apply_json_patch,
 )
-from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS
+from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS, GAME_VERSION
 
 
 class MagicGardenClient:
@@ -58,7 +58,7 @@ class MagicGardenClient:
         Returns:
             Tuple of (auth_data, updated_cookies) or (None, None) on failure
         """
-        auth_url = f"https://magicgarden.gg/version/cb622cd/api/rooms/{room_id}/user/authenticate-web"
+        auth_url = f"https://magicgarden.gg/version/{GAME_VERSION}/api/rooms/{room_id}/user/authenticate-web"
         headers = {
             "accept": "*/*",
             "content-type": "application/json",
@@ -69,31 +69,35 @@ class MagicGardenClient:
         }
         payload = {"provider": "maybe-existing-jwt"}
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(auth_url, json=payload, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    updated_cookies = self.cookies
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(auth_url, json=payload, headers=headers) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        updated_cookies = self.cookies
 
-                    if "Set-Cookie" in response.headers:
-                        set_cookie = response.headers.get("Set-Cookie")
-                        new_cookie = set_cookie.split(";")[0]
-                        cookie_dict = {}
-                        for cookie_pair in self.cookies.split("; "):
-                            if "=" in cookie_pair:
-                                name, value = cookie_pair.split("=", 1)
+                        if "Set-Cookie" in response.headers:
+                            set_cookie = response.headers.get("Set-Cookie")
+                            new_cookie = set_cookie.split(";")[0]
+                            cookie_dict = {}
+                            for cookie_pair in self.cookies.split("; "):
+                                if "=" in cookie_pair:
+                                    name, value = cookie_pair.split("=", 1)
+                                    cookie_dict[name] = value
+                            if "=" in new_cookie:
+                                name, value = new_cookie.split("=", 1)
                                 cookie_dict[name] = value
-                        if "=" in new_cookie:
-                            name, value = new_cookie.split("=", 1)
-                            cookie_dict[name] = value
-                        updated_cookies = "; ".join(
-                            [f"{k}={v}" for k, v in cookie_dict.items()]
-                        )
+                            updated_cookies = "; ".join(
+                                [f"{k}={v}" for k, v in cookie_dict.items()]
+                            )
 
-                    if data.get("isAuthenticated"):
-                        return data, updated_cookies
+                        if data.get("isAuthenticated"):
+                            return data, updated_cookies
 
-                return None, None
+                    return None, None
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            print(f"  Network error during authentication: {e}")
+            return None, None
 
     async def try_room(
         self, room_id: str, headers: Dict[str, str]
@@ -108,7 +112,7 @@ class MagicGardenClient:
         Returns:
             Tuple of (websocket, welcome_data, room_id) or (None, None, None) on failure
         """
-        url = f"wss://magicgarden.gg/version/cb622cd/api/rooms/{room_id}/connect?surface=%22web%22&platform=%22desktop%22&playerId=%22{self.player_id}%22&version=%22cb622cd%22&source=%22manualUrl%22&capabilities=%22fbo_mipmap_unsupported%22"
+        url = f"wss://magicgarden.gg/version/{GAME_VERSION}/api/rooms/{room_id}/connect?surface=%22web%22&platform=%22desktop%22&playerId=%22{self.player_id}%22&version=%22{GAME_VERSION}%22&source=%22manualUrl%22&capabilities=%22fbo_mipmap_unsupported%22"
 
         print(f"\nTrying room {room_id}...")
 

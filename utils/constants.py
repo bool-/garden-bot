@@ -8,6 +8,9 @@ MESSAGE_LOG_FILE = "messages.log"
 # Configuration file
 CONFIG_FILE = "bot_config.json"
 
+# Game version (used in API URLs and WebSocket connection)
+GAME_VERSION = "cb622cd"
+
 # Spawn positions - server coordinates for spawning (determines which garden you get)
 # Ordered left-to-right, top-to-bottom (slot 0-5)
 # Local (0,0) maps to base position. Slots offset by 26 right and 11 down
