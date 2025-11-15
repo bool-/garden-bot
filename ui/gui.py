@@ -355,53 +355,13 @@ class MagicGardenGUI:
         """Extract player data from full_state"""
         return self.game_state.get_player_slot()
 
-    def render_garden_state(self, player_slot):
-        """Render the garden grid with actual tile objects"""
-
-        slot_data = player_slot.get("data", {})
-        # Clear canvas
-        self.garden_canvas.delete("all")
-
-        # Canvas dimensions
-        canvas_width = 650
-        canvas_height = 400
-
-        # Get garden data
-        garden_data = slot_data.get("garden", {})
-        tile_objects = garden_data.get("tileObjects", {})
-
-        # Garden is 10 rows x 20 columns (200 tiles total: 0-199)
-        # But visually it's two 10×10 sections with boardwalk paths
-        garden_rows = 10
-        garden_cols = 20
-
-        # Visual grid includes boardwalk paths
-        # +1 top border, +1 bottom border, +1 middle path
-        visual_rows = garden_rows + 2  # 12 total
-        # +1 left border, +1 middle path, +1 right border
-        visual_cols = garden_cols + 3  # 23 total
-
-        # Calculate tile size to fill entire canvas
-        tile_size_width = canvas_width // visual_cols
-        tile_size_height = canvas_height // visual_rows
-
-        # Use the smaller dimension to ensure grid fits entirely
-        tile_size = min(tile_size_width, tile_size_height)
-
-        # Draw background
-        self.garden_canvas.create_rectangle(
-            0, 0, canvas_width, canvas_height, fill=self.colors["canvas_bg"], outline=""
-        )
-
-        # Stats
-        total_tiles = len(tile_objects)
+    def _calculate_garden_stats(self, tile_objects):
+        """Calculate garden statistics from tile objects."""
         growing_count = 0
         mature_count = 0
-        empty_count = 0
-
         current_time = int(time.time() * 1000)
 
-        for tile_id, tile_obj in tile_objects.items():
+        for tile_obj in tile_objects.values():
             if tile_obj and tile_obj.get("objectType") == "plant":
                 slots = tile_obj.get("slots", [])
                 if slots:
@@ -412,287 +372,218 @@ class MagicGardenGUI:
                     else:
                         growing_count += 1
 
-        empty_count = 200 - total_tiles
+        empty_count = 200 - len(tile_objects)
+        return growing_count, mature_count, empty_count
 
-        # Position the grid - offset by labelframe border width
-        border_offset = 2
-        start_x = border_offset
-        start_y = border_offset
+    def _build_tile_position_map(self, tile_objects, garden_cols=20):
+        """Build a map from visual position to tile object for fast lookup."""
+        position_map = {}
 
-        # Get player position from server state
-        player_server_pos = player_slot.get("position")
-        player_x = -1  # Default to invalid if no position
-        player_y = -1
+        for tid, obj in tile_objects.items():
+            if tid.isdigit():
+                tile_id = int(tid)
+                row = tile_id // garden_cols
+                col = tile_id % garden_cols
 
-        if isinstance(player_server_pos, dict):
-            server_x = player_server_pos.get("x")
-            server_y = player_server_pos.get("y")
-            if server_x is not None and server_y is not None:
-                # Convert server position to local coordinates
-                local_coords = convert_server_to_local_coords(server_x, server_y, self.game_state)
-                if local_coords:
-                    player_x = local_coords.get("x", -1)
-                    player_y = local_coords.get("y", -1)
+                # Convert to visual position
+                visual_row = row + 1  # +1 for top border
+                visual_col = col + 1 if col < 10 else col + 2  # +1 or +2 for borders
 
-        # Helper: Convert garden tile ID to visual position
-        def garden_tile_to_visual(tile_id):
-            """Convert garden tile (0-199) to visual grid position"""
-            row = tile_id // garden_cols
-            col = tile_id % garden_cols
+                position_map[(visual_row, visual_col)] = (tid, obj)
 
-            # Add 1 for top border
-            visual_row = row + 1
+        return position_map
 
-            # Left section (cols 0-9): add 1 for left border
-            # Right section (cols 10-19): add 2 for left border + middle path
-            if col < 10:
-                visual_col = col + 1
+    def _get_tile_color(self, tile_obj, min_mutations):
+        """Determine fill and outline color for a tile object."""
+        current_time = int(time.time() * 1000)
+        obj_type = tile_obj.get("objectType")
+
+        if obj_type == "plant":
+            slots = tile_obj.get("slots", [])
+            if slots:
+                slot = slots[0]
+                end_time = slot.get("endTime", 0)
+                mutations = slot.get("mutations", [])
+                mutation_count = len(mutations)
+
+                if current_time >= end_time:
+                    # Mature
+                    if mutation_count >= min_mutations:
+                        return "#00e676", "#1fec84"  # Ready to harvest - vibrant green
+                    else:
+                        return "#ff9100", "#ffa726"  # Grown but not mutated - orange
+                else:
+                    return "#ffd93d", "#ffe066"  # Growing - yellow
             else:
-                visual_col = col + 2
-
-            return visual_row, visual_col
-
-        def garden_coord_to_visual(coord_x, coord_y):
-            """Convert local garden coordinates to the visual grid."""
-            if coord_x is None or coord_y is None:
-                return None
-
-            visual_row = coord_y + 1
-            if coord_x < 10:
-                visual_col = coord_x + 1
+                return "#5a5a6e", "#6a6a7e"  # Empty plant slot
+        elif obj_type == "egg":
+            matured_at = tile_obj.get("maturedAt", 0)
+            if current_time >= matured_at:
+                return "#69f0ae", "#7ff5bb"  # Mature egg - mint green
             else:
-                visual_col = coord_x + 2
+                return "#ffeb3b", "#fff176"  # Growing egg - bright yellow
+        elif obj_type == "pet":
+            return "#d946ef", "#e469f2"  # Pet - magenta
+        elif obj_type == "decor":
+            return "#607D8B", "#78909C"  # Decoration - blue/gray
+        else:
+            return "#666666", "#888888"  # Unknown
 
-            if (
-                visual_row < 0
-                or visual_row >= visual_rows
-                or visual_col < 0
-                or visual_col >= visual_cols
-            ):
-                return None
+    def _draw_mutation_indicators(self, canvas, x, y, tile_size, mutations):
+        """Draw mutation indicators on a plant tile."""
+        indicator_size = max(tile_size // 4, 3)
 
-            return visual_row, visual_col
+        # Rainbow indicator (top-right)
+        if "Rainbow" in mutations:
+            indicator_x = x + tile_size - indicator_size - 2
+            indicator_y = y + 2
+            rainbow_colors = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#0000ff", "#4b0082"]
+            stripe_height = max(indicator_size // len(rainbow_colors), 1)
 
-        # Draw visual grid
-        for row in range(visual_rows):
-            for col in range(visual_cols):
-                x = start_x + col * tile_size
-                y = start_y + row * tile_size
-
-                # Initialize variables for all tiles
-                tile_obj = None
-                obj_type = None
-                slots = None
-
-                # Determine if this is a boardwalk path
-                is_boardwalk = (
-                    row == 0
-                    or row == visual_rows - 1  # Top/bottom border
-                    or col == 0
-                    or col == visual_cols - 1  # Left/right border
-                    or col == 11  # Middle path (between two 10×10 sections)
+            for i, color in enumerate(rainbow_colors):
+                canvas.create_rectangle(
+                    indicator_x,
+                    indicator_y + i * stripe_height,
+                    indicator_x + indicator_size,
+                    indicator_y + (i + 1) * stripe_height,
+                    fill=color,
+                    outline="",
                 )
 
+        # Gold indicator (top-left if Rainbow, else top-right)
+        if "Gold" in mutations:
+            indicator_x = x + 2 if "Rainbow" in mutations else x + tile_size - indicator_size - 2
+            indicator_y = y + 2
+            canvas.create_oval(
+                indicator_x,
+                indicator_y,
+                indicator_x + indicator_size,
+                indicator_y + indicator_size,
+                fill="#ffd700",
+                outline="#ffed4e",
+                width=1,
+            )
+
+        # Water state indicator (left side)
+        water_states = {
+            "Frozen": "#E1F5FE",
+            "Chilled": "#00BCD4",
+            "Wet": "#2196F3",
+        }
+        for state, color in water_states.items():
+            if state in mutations:
+                indicator_x = x + 2
+                indicator_y = y + tile_size // 2 - indicator_size // 2
+                canvas.create_oval(
+                    indicator_x,
+                    indicator_y,
+                    indicator_x + indicator_size,
+                    indicator_y + indicator_size,
+                    fill=color,
+                    outline="#FFFFFF",
+                    width=1,
+                )
+                break
+
+        # Light state indicator (bottom)
+        light_states = {
+            "Ambershine": "#FFAB00",
+            "Dawnlit": "#FF6090",
+        }
+        for state, color in light_states.items():
+            if state in mutations:
+                indicator_x = x + tile_size // 2 - indicator_size // 2
+                indicator_y = y + tile_size - indicator_size - 2
+                canvas.create_oval(
+                    indicator_x,
+                    indicator_y,
+                    indicator_x + indicator_size,
+                    indicator_y + indicator_size,
+                    fill=color,
+                    outline="#FFFFFF",
+                    width=1,
+                )
+                break
+
+    def render_garden_state(self, player_slot):
+        """Render the garden grid with actual tile objects."""
+        slot_data = player_slot.get("data", {})
+        self.garden_canvas.delete("all")
+
+        # Extract garden data
+        garden_data = slot_data.get("garden", {})
+        tile_objects = garden_data.get("tileObjects", {})
+
+        # Configuration
+        canvas_width = 650
+        canvas_height = 400
+        garden_rows, garden_cols = 10, 20
+        visual_rows, visual_cols = 12, 23  # +borders and paths
+        border_offset = 2
+
+        # Calculate tile size
+        tile_size = min(canvas_width // visual_cols, canvas_height // visual_rows)
+
+        # Draw background
+        self.garden_canvas.create_rectangle(
+            0, 0, canvas_width, canvas_height, fill=self.colors["canvas_bg"], outline=""
+        )
+
+        # Build tile position map (eliminates O(n²×m) lookups)
+        position_map = self._build_tile_position_map(tile_objects, garden_cols)
+
+        # Get min mutations config
+        min_mutations = self.harvest_config.min_mutations if self.harvest_config else 3
+
+        # Draw grid
+        for row in range(visual_rows):
+            for col in range(visual_cols):
+                x = border_offset + col * tile_size
+                y = border_offset + row * tile_size
+
+                # Check if boardwalk
+                is_boardwalk = row in (0, visual_rows - 1) or col in (0, visual_cols - 1, 11)
+
                 if is_boardwalk:
-                    # Boardwalk path - warmer brown/tan color
-                    fill_color = "#a0826d"
-                    outline_color = "#b8956f"
+                    fill_color, outline_color = "#a0826d", "#b8956f"
                 else:
-                    # Default empty garden tile - dark purple-gray
-                    fill_color = "#4a4a5e"
-                    outline_color = "#5a5a6e"
+                    # Check for tile object at this position
+                    tile_info = position_map.get((row, col))
+                    if tile_info:
+                        tid, tile_obj = tile_info
+                        fill_color, outline_color = self._get_tile_color(tile_obj, min_mutations)
 
-                    # Check if there's a garden tile at this visual position
-                    for tid, obj in tile_objects.items():
-                        if tid.isdigit():
-                            obj_row, obj_col = garden_tile_to_visual(int(tid))
-                            if obj_row == row and obj_col == col:
-                                tile_obj = obj
-                                break
-
-                    # Render garden tile if present
-                    if tile_obj:
-                        obj_type = tile_obj.get("objectType")
-
-                        if obj_type == "plant":
+                        # Warn if multiple slots (should be rare)
+                        if tile_obj.get("objectType") == "plant":
                             slots = tile_obj.get("slots", [])
                             if len(slots) > 1:
-                                print(
-                                    f"DEBUG: tile {tid} reported {len(slots)} plant slots; only the first will be rendered."
-                                )
-                            if slots:
-                                slot = slots[0]
-                                end_time = slot.get("endTime", 0)
-                                species = slot.get("species", "?")
-                                mutations = slot.get("mutations", [])
-                                mutation_count = len(mutations)
-
-                                # Get min mutations required for harvest
-                                min_mutations = 3
-                                if self.harvest_config:
-                                    min_mutations = self.harvest_config.min_mutations
-
-                                # Check if mature
-                                if current_time >= end_time:
-                                    # Mature - check mutations
-                                    if mutation_count >= min_mutations:
-                                        # Ready to harvest - vibrant bright green
-                                        fill_color = "#00e676"
-                                        outline_color = "#1fec84"
-                                    else:
-                                        # Grown but not fully mutated - vibrant orange
-                                        fill_color = "#ff9100"
-                                        outline_color = "#ffa726"
-                                else:
-                                    # Growing - golden yellow
-                                    fill_color = "#ffd93d"
-                                    outline_color = "#ffe066"
-                            else:
-                                # Empty plant slot
-                                fill_color = "#5a5a6e"
-                                outline_color = "#6a6a7e"
-                        elif obj_type == "egg":
-                            # Egg - check if mature
-                            matured_at = tile_obj.get("maturedAt", 0)
-                            if current_time >= matured_at:
-                                # Mature egg (ready) - bright mint green
-                                fill_color = "#69f0ae"
-                                outline_color = "#7ff5bb"
-                            else:
-                                # Growing egg - bright yellow
-                                fill_color = "#ffeb3b"
-                                outline_color = "#fff176"
-                        elif obj_type == "pet":
-                            # Pet on tile - vibrant magenta/purple
-                            fill_color = "#d946ef"
-                            outline_color = "#e469f2"
-                        elif obj_type == "decor":
-                            # Decoration - blue/gray
-                            fill_color = "#607D8B"
-                            outline_color = "#78909C"
-                        else:
-                            # Unknown object
-                            fill_color = "#666666"
-                            outline_color = "#888888"
+                                print(f"DEBUG: tile {tid} has {len(slots)} slots; rendering first only")
+                    else:
+                        fill_color, outline_color = "#4a4a5e", "#5a5a6e"  # Empty
 
                 # Draw tile
                 self.garden_canvas.create_rectangle(
-                    x,
-                    y,
-                    x + tile_size - 1,
-                    y + tile_size - 1,
-                    fill=fill_color,
-                    outline=outline_color,
-                    width=1,
+                    x, y, x + tile_size - 1, y + tile_size - 1,
+                    fill=fill_color, outline=outline_color, width=1
                 )
 
-                # Draw mutation indicators for plants
-                if tile_obj and obj_type == "plant" and slots:
-                    slot = slots[0]
-                    mutations = slot.get("mutations", [])
+                # Draw mutation indicators
+                if not is_boardwalk:
+                    tile_info = position_map.get((row, col))
+                    if tile_info:
+                        _, tile_obj = tile_info
+                        if tile_obj.get("objectType") == "plant":
+                            slots = tile_obj.get("slots", [])
+                            if slots:
+                                mutations = slots[0].get("mutations", [])
+                                self._draw_mutation_indicators(
+                                    self.garden_canvas, x, y, tile_size, mutations
+                                )
 
-                    # Check for Rainbow mutation
-                    if "Rainbow" in mutations:
-                        # Draw rainbow gradient indicator in top-right corner
-                        indicator_size = max(tile_size // 4, 3)
-                        indicator_x = x + tile_size - indicator_size - 2
-                        indicator_y = y + 2
-
-                        # Create a small rainbow effect with multiple colored stripes
-                        rainbow_colors = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#0000ff", "#4b0082"]
-                        stripe_height = max(indicator_size // len(rainbow_colors), 1)
-
-                        for i, color in enumerate(rainbow_colors):
-                            self.garden_canvas.create_rectangle(
-                                indicator_x,
-                                indicator_y + i * stripe_height,
-                                indicator_x + indicator_size,
-                                indicator_y + (i + 1) * stripe_height,
-                                fill=color,
-                                outline="",
-                            )
-
-                    # Check for Gold mutation
-                    if "Gold" in mutations:
-                        # Draw gold star/diamond indicator
-                        indicator_size = max(tile_size // 4, 3)
-                        # Position in top-left if Rainbow is present, otherwise top-right
-                        if "Rainbow" in mutations:
-                            indicator_x = x + 2
-                        else:
-                            indicator_x = x + tile_size - indicator_size - 2
-                        indicator_y = y + 2
-
-                        # Draw a gold circle/oval
-                        self.garden_canvas.create_oval(
-                            indicator_x,
-                            indicator_y,
-                            indicator_x + indicator_size,
-                            indicator_y + indicator_size,
-                            fill="#ffd700",
-                            outline="#ffed4e",
-                            width=1,
-                        )
-
-                    # Check for Wet/Chilled/Frozen states (left side indicator)
-                    water_state = None
-                    water_color = None
-                    if "Frozen" in mutations:
-                        water_state = "Frozen"
-                        water_color = "#E1F5FE"  # Ice blue/white
-                    elif "Chilled" in mutations:
-                        water_state = "Chilled"
-                        water_color = "#00BCD4"  # Cyan
-                    elif "Wet" in mutations:
-                        water_state = "Wet"
-                        water_color = "#2196F3"  # Blue
-
-                    if water_state:
-                        indicator_size = max(tile_size // 4, 3)
-                        indicator_x = x + 2
-                        indicator_y = y + tile_size // 2 - indicator_size // 2
-
-                        # Draw water/ice state indicator
-                        self.garden_canvas.create_oval(
-                            indicator_x,
-                            indicator_y,
-                            indicator_x + indicator_size,
-                            indicator_y + indicator_size,
-                            fill=water_color,
-                            outline="#FFFFFF",
-                            width=1,
-                        )
-
-                    # Check for Dawnlit/Ambershine states (bottom indicator)
-                    light_state = None
-                    light_color = None
-                    if "Ambershine" in mutations:
-                        light_state = "Ambershine"
-                        light_color = "#FFAB00"  # Amber/golden
-                    elif "Dawnlit" in mutations:
-                        light_state = "Dawnlit"
-                        light_color = "#FF6090"  # Dawn pink
-
-                    if light_state:
-                        indicator_size = max(tile_size // 4, 3)
-                        indicator_x = x + tile_size // 2 - indicator_size // 2
-                        indicator_y = y + tile_size - indicator_size - 2
-
-                        # Draw light state indicator
-                        self.garden_canvas.create_oval(
-                            indicator_x,
-                            indicator_y,
-                            indicator_x + indicator_size,
-                            indicator_y + indicator_size,
-                            fill=light_color,
-                            outline="#FFFFFF",
-                            width=1,
-                        )
-
-        # Draw pets using current petSlotInfos positions
+        # Draw pets
         pet_slot_infos = player_slot.get("petSlotInfos")
         if isinstance(pet_slot_infos, dict):
-            for pet_id, slot_info in pet_slot_infos.items():
+            for slot_info in pet_slot_infos.values():
                 if not isinstance(slot_info, dict):
                     continue
 
@@ -706,52 +597,38 @@ class MagicGardenGUI:
                 if not local_coords:
                     continue
 
-                # Local coords map 1:1 to visual grid (0-22 for x, 0-11 for y)
-                local_x = local_coords.get("x")
-                local_y = local_coords.get("y")
-
-                # Bounds check
+                local_x, local_y = local_coords.get("x"), local_coords.get("y")
                 if local_x < 0 or local_x > 22 or local_y < 0 or local_y > 11:
                     continue
 
-                pet_pixel_x = start_x + local_x * tile_size
-                pet_pixel_y = start_y + local_y * tile_size
-
-                center_x = pet_pixel_x + tile_size // 2
-                center_y = pet_pixel_y + tile_size // 2
+                center_x = border_offset + local_x * tile_size + tile_size // 2
+                center_y = border_offset + local_y * tile_size + tile_size // 2
                 radius = max(tile_size // 3, 4)
 
                 self.garden_canvas.create_oval(
-                    center_x - radius,
-                    center_y - radius,
-                    center_x + radius,
-                    center_y + radius,
-                    fill="#d946ef",
-                    outline="#e980f5",
-                    width=2,
+                    center_x - radius, center_y - radius,
+                    center_x + radius, center_y + radius,
+                    fill="#d946ef", outline="#e980f5", width=2
                 )
 
-        # Draw player marker using local coordinates
-        # Convert local coordinates (0-22, 0-11) to visual grid for rendering
-        if player_x >= 0 and player_y >= 0:
-            # Player is in local coordinates, render directly on visual grid
-            # Local coords map 1:1 to visual grid (both are 0-22 for x, 0-11 for y)
-            player_pixel_x = start_x + player_x * tile_size
-            player_pixel_y = start_y + player_y * tile_size
+        # Draw player marker
+        player_pos = player_slot.get("position")
+        if isinstance(player_pos, dict):
+            server_x, server_y = player_pos.get("x"), player_pos.get("y")
+            if server_x is not None and server_y is not None:
+                local_coords = convert_server_to_local_coords(server_x, server_y, self.game_state)
+                if local_coords:
+                    player_x, player_y = local_coords.get("x", -1), local_coords.get("y", -1)
+                    if player_x >= 0 and player_y >= 0:
+                        center_x = border_offset + player_x * tile_size + tile_size // 2
+                        center_y = border_offset + player_y * tile_size + tile_size // 2
+                        radius = max(tile_size // 3, 4)
 
-            # Draw bright cyan circle for player
-            center_x = player_pixel_x + tile_size // 2
-            center_y = player_pixel_y + tile_size // 2
-            radius = max(tile_size // 3, 4)
-            self.garden_canvas.create_oval(
-                center_x - radius,
-                center_y - radius,
-                center_x + radius,
-                center_y + radius,
-                fill="#00d4ff",
-                outline="#33ddff",
-                width=2,
-            )
+                        self.garden_canvas.create_oval(
+                            center_x - radius, center_y - radius,
+                            center_x + radius, center_y + radius,
+                            fill="#00d4ff", outline="#33ddff", width=2
+                        )
 
     def render_pet_state(self, slot_data):
         """Render the pet state in its own box"""
