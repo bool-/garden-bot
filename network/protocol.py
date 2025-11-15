@@ -271,9 +271,8 @@ def process_partial_state_message(data: Dict[str, Any], game_state: GameState):
     """
     log_message_to_file("RECEIVED (PartialState)", data)
 
-    # Check if we have full state
-    full_state = game_state.get_full_state()
-    if not full_state:
+    # Check if we have full state (use unsafe accessor to avoid expensive deepcopy)
+    if not game_state.get_full_state_unsafe():
         print("WARNING: Received PartialState before Welcome message")
         return
 
