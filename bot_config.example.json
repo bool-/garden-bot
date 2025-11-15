@@ -1,0 +1,35 @@
+{
+  "playerId": "p_YOUR_PLAYER_ID_HERE",
+  "cookies": "YOUR_COOKIE_STRING_HERE",
+  "lastRoom": "MG1",
+  "ready_to_harvest": {
+    "min_mutations": 3
+  },
+  "shop": {
+    "enabled": false,
+    "check_interval_seconds": 60,
+    "min_coins_to_keep": 1000000,
+    "items_to_buy": {
+      "seeds": {
+        "enabled": true,
+        "items": [
+          "Aloe",
+          "OrangeTulip",
+          "Bamboo",
+          "Sunflower",
+          "Starweaver"
+        ]
+      },
+      "eggs": {
+        "enabled": true,
+        "items": [
+          "CommonEgg",
+          "UncommonEgg",
+          "RareEgg",
+          "LegendaryEgg",
+          "MythicalEgg"
+        ]
+      }
+    }
+  }
+}
