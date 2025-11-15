@@ -307,3 +307,30 @@ class GameState:
                 if slot and slot.get("playerId") == self._player_id:
                     self._user_slot_index = idx
                     break
+
+    def get_player_slot(self) -> Optional[Dict[str, Any]]:
+        """Find and return the player's user slot from game state.
+
+        This returns the full slot object which contains both 'data' and
+        'petSlotInfos' at the slot level.
+
+        Returns:
+            Deep copy of the player's slot, or None if not found
+        """
+        with self._lock:
+            if not self._full_state or not self._player_id:
+                return None
+
+            child_state = self._full_state.get("child", {})
+            if child_state.get("scope") != "Quinoa":
+                return None
+
+            quinoa_state = child_state.get("data", {})
+            user_slots = quinoa_state.get("userSlots", [])
+
+            for slot_index, slot in enumerate(user_slots):
+                if slot and slot.get("playerId") == self._player_id:
+                    self._user_slot_index = slot_index
+                    return deepcopy(slot)
+
+            return None
