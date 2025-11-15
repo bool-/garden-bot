@@ -266,11 +266,16 @@ def apply_json_patch(obj, patch):
 
 def parse_command_line_args():
     """Parse command line arguments"""
-    room_id_override = None
-    for arg in sys.argv[1:]:
-        if arg.startswith("--room-id="):
-            room_id_override = arg.split("=", 1)[1]
-    return room_id_override
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Magic Garden Bot')
+    parser.add_argument('--room-id', type=str, help='Override room ID to join')
+    parser.add_argument('--headless', action='store_true', help='Run in headless mode (no GUI)')
+
+    args = parser.parse_args()
+
+    # Return both room_id and headless flag
+    return args.room_id, args.headless
 
 
 # GUI Application - Simple Inventory Display
@@ -2614,8 +2619,13 @@ async def websocket_client():
     base_cookies = user["cookies"]
     last_room = user["lastRoom"]
 
-    # Check for command line override
-    room_id_override = parse_command_line_args()
+    # Check for command line override (may have been parsed in main already)
+    if "room_id_override" in game_state:
+        room_id_override = game_state["room_id_override"]
+    else:
+        room_id_override, headless_mode = parse_command_line_args()
+        game_state["headless_mode"] = headless_mode
+        game_state["room_id_override"] = room_id_override
 
     game_state["player_id"] = player_id
     print(f"\nPlayer ID: {player_id}")
@@ -2821,14 +2831,26 @@ def run_websocket():
 
 
 def main():
-    # Start WebSocket in separate thread
-    ws_thread = threading.Thread(target=run_websocket, daemon=True)
-    ws_thread.start()
+    # Parse command line arguments first to check for headless mode
+    room_id_override, headless_mode = parse_command_line_args()
 
-    # Start GUI
-    root = tk.Tk()
-    app = MagicGardenGUI(root)
-    root.mainloop()
+    # Store in game_state so websocket_client can use them
+    game_state["room_id_override"] = room_id_override
+    game_state["headless_mode"] = headless_mode
+
+    if headless_mode:
+        # Run in headless mode (no GUI)
+        print("Running in headless mode (no GUI)")
+        asyncio.run(websocket_client())
+    else:
+        # Start WebSocket in separate thread
+        ws_thread = threading.Thread(target=run_websocket, daemon=True)
+        ws_thread.start()
+
+        # Start GUI
+        root = tk.Tk()
+        app = MagicGardenGUI(root)
+        root.mainloop()
 
 
 if __name__ == "__main__":
