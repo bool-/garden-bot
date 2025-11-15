@@ -1,127 +1,127 @@
 # Magic Garden Bot
 
-A bot for Magic Garden that connects via WebSocket and provides real-time game state visualization.
+A bot for Magic Garden that connects via WebSocket, provides real-time game state visualization, and automates gameplay tasks.
 
-## Files
+## Quick Start
 
-### `bot_gui.py` (GUI Version) ⭐ **RECOMMENDED**
-**Full graphical interface with tkinter!**
+### GUI Mode (Recommended)
+
+```bash
+python app.py
+```
+
+Launches the full graphical interface with:
 - **Live world map** - Visual grid showing your position, pets, and other players
 - **Garden viewer** - See your actual garden with crops and growth stages
 - **Real-time inventory** - Seeds, tools, pets, eggs with quantities
 - **Statistics dashboard** - Message counts, connection status
 - **Three-panel layout** - World view, Garden view, Stats/Inventory
-- **All messages logged to `messages.log`** for debugging
 
-### `bot.py` (Original)
-Basic bot with detailed console logging. Shows all game state on startup.
-
-### `bot_v2.py` (Clean Terminal UI)
-- **All messages logged to `messages.log`**
-- **Clean dashboard UI** with inventory, stats, and garden info
-- **Live statistics** tracking
-- **Automatic ping/pong handling**
-
-### `bot_v3.py` (ASCII Game Viewer)
-Everything from v2, plus:
-- **Visual garden view** - See your crops with growth stages (🌰 → 🌱 → 🌿 → 🌾)
-- **World minimap** - 40x15 view showing:
-  - 🐱 Your position
-  - 🐾 Pet locations
-  - 👤 Other players
-- **Real-time updates** as you play
-- **Two-column layout** - Game view on left, stats on right
-
-## Usage
+### Headless Mode
 
 ```bash
-# Run the GUI version (recommended!)
-python bot_gui.py
-
-# Run the ASCII game viewer
-python bot_v3.py
-
-# Run the clean UI version
-python bot_v2.py
-
-# Run the original
-python bot.py
+python app.py --headless
 ```
+
+Runs automation without GUI - perfect for running in background or on servers.
+
+### Custom Room
+
+```bash
+python app.py --room-id MG1
+```
+
+Join a specific room instead of the default.
+
+## Architecture
+
+The bot uses a modular architecture:
+
+- **`app.py`** - Main entry point
+- **`config.py`** - Configuration management (loads `bot_config.json`)
+- **`game_state.py`** - Thread-safe game state management
+- **`network/client.py`** - WebSocket client and connection handling
+- **`network/protocol.py`** - Message processing and protocol logic
+- **`automation/`** - Automated gameplay modules:
+  - `harvest.py` - Auto-harvest and replant crops
+  - `pets.py` - Pet feeding and movement
+  - `shop.py` - Automatic seed/egg purchasing
+- **`ui/gui.py`** - Tkinter GUI interface
+- **`utils/`** - Coordinate conversion, validation, etc.
 
 ## Features
 
-✅ **Automatic message logging** - All WebSocket messages saved to `messages.log`
+### Core Functionality
+✅ **WebSocket connection** - Full game protocol support
+✅ **Thread-safe state management** - Proper locking for concurrent access
+✅ **Automatic message logging** - All WebSocket traffic saved to `messages.log`
 ✅ **Persistent player ID** - Saved in `bot_config.json`
 ✅ **Real-time updates** - UI refreshes on every game state change
-✅ **Clean console output** - Only shows relevant game info
-✅ **Emulates browser behavior** - Sends proper pings, pet positions, etc.
+✅ **Emulates browser behavior** - Proper pings, pongs, position updates
 
-## What the bot does
+### Automation Features
+✅ **Auto-harvest** - Automatically harvest mature crops and replant
+  - Configurable minimum mutations
+  - Harvesting modes: lowest, highest, or first
+  - Species-specific targeting
+✅ **Pet automation** - Feed hungry pets and move them around garden
+  - Configurable food limits per species
+  - Random movement within garden bounds
+✅ **Shop automation** - Auto-purchase seeds and eggs when low
+  - Configurable minimum stock levels
+  - Coin balance checking
 
-Based on the HAR file analysis, the bot emulates these client behaviors:
+### Protocol Support
 
-1. **Initial connection**:
-   - VoteForGame (Quinoa)
-   - SetSelectedGame (Quinoa)
+The bot emulates proper client behavior:
 
-2. **Periodic messages** (every 2 seconds):
-   - Ping messages with timestamp ID
-   - Pong responses to server pings
+1. **Connection** - VoteForGame, SetSelectedGame, authentication
+2. **Periodic** - Ping/Pong (every 2s), PlayerPosition updates
+3. **Gameplay** - PlantSeed, Harvest, FeedPet, BuyItem, PetPositions
+4. **State tracking** - FullState, PartialState (JSON patches)
 
-3. **As needed**:
-   - PlayerPosition updates
-   - PetPositions updates
-   - SetSelectedItem
+## Configuration
 
-4. **Tracks everything**:
-   - Inventory (coins, seeds, tools, pets, eggs)
-   - Garden state (planted crops, growth stages)
-   - Player positions (you and others)
-   - Pet positions in the world
-   - Room info
+Edit `bot_config.json` to customize behavior:
 
-## Game Viewer Display
-
-```
-╔══════════════════════════════════════════════════════════════════════════════════════════════════╗
-║                              🪴 Magic Garden Bot - Live Game Viewer 🪴                            ║
-╚══════════════════════════════════════════════════════════════════════════════════════════════════╝
-
-┌─ PLAYER INFO ──────────────────────────┐  ┌─ INVENTORY ───────────────────────────┐
-│ YourName                               │  │ 💰 Coins: 1250                        │
-│ Pos: (66, 25)                         │  │                                        │
-│ Garden: 5x5                           │  │ 🌱 Seeds:                              │
-└───────────────────────────────────────┘  │   Carrot: 10                          │
-                                            │   Tomato: 5                           │
-┌─ WORLD VIEW ──────────────────────────┐  │                                        │
-│                                        │  │ 🔧 Tools:                              │
-│          🐾                           │  │   Watering Can: 1                     │
-│                                        │  │                                        │
-│             🐱                        │  │ 🐾 Pets:                               │
-│                                        │  │   Cat: 3                              │
-│        👤                             │  │                                        │
-│                   🐾                  │  │ 🥚 Eggs: None                          │
-│                                        │  └────────────────────────────────────────┘
-│                                        │
-└────────────────────────────────────────┘  ┌─ ROOM ────────────────────────────────┐
-                                            │ Game: Quinoa                          │
-┌─ YOUR GARDEN ─────────────────────────┐  │ Players: 3                            │
-│ 🌾 🌿 □  □  □                        │  └────────────────────────────────────────┘
-│ 🌱 🌾 □  □  □                        │
-│ □  □  □  🌰 □                        │  ┌─ STATS ───────────────────────────────┐
-│ □  □  □  □  □                        │  │ Msgs Sent: 42                         │
-│ □  □  □  □  □                        │  │ Msgs Recv: 156                        │
-└────────────────────────────────────────┘  │ Pings: 21                             │
-                                            │ Log: messages.log                     │
-Last Update: 14:23:45                       └────────────────────────────────────────┘
+```json
+{
+  "player_id": "your-persistent-id",
+  "harvest": {
+    "enabled": true,
+    "species": "Carrot",
+    "min_mutations": 3,
+    "mode": "lowest"
+  },
+  "pet_food": {
+    "enabled": true,
+    "limits": {
+      "Cat": 5,
+      "Dog": 3
+    }
+  },
+  "shop": {
+    "enabled": true,
+    "seeds": {
+      "Carrot": 10
+    },
+    "eggs": {
+      "Cat": 2
+    }
+  }
+}
 ```
 
 ## Debugging
 
-Check `messages.log` for all WebSocket traffic:
-- Every sent message
-- Every received message
+All WebSocket traffic is logged to `messages.log`:
+- Sent and received messages
 - Timestamps
-- Full JSON data
+- Full JSON payloads
+- Protocol events (Welcome, PartialState, etc.)
 
 Perfect for debugging and understanding the game protocol!
+
+## Legacy Files
+
+⚠️ **`bot_gui.py`** is a legacy monolithic version from before the refactoring. Use `app.py` instead for the current modular architecture with proper separation of concerns.
