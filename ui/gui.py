@@ -505,6 +505,68 @@ class MagicGardenGUI:
                 )
                 break
 
+    def _draw_pets(self, canvas, player_slot, border_offset, tile_size):
+        """Draw pet markers on the canvas."""
+        pet_slot_infos = player_slot.get("petSlotInfos")
+        if not isinstance(pet_slot_infos, dict):
+            return
+
+        for slot_info in pet_slot_infos.values():
+            if not isinstance(slot_info, dict):
+                continue
+
+            position = slot_info.get("position")
+            if not isinstance(position, dict):
+                continue
+
+            local_coords = convert_server_to_local_coords(
+                position.get("x"), position.get("y"), self.game_state
+            )
+            if not local_coords:
+                continue
+
+            local_x, local_y = local_coords.get("x"), local_coords.get("y")
+            if local_x < 0 or local_x > 22 or local_y < 0 or local_y > 11:
+                continue
+
+            center_x = border_offset + local_x * tile_size + tile_size // 2
+            center_y = border_offset + local_y * tile_size + tile_size // 2
+            radius = max(tile_size // 3, 4)
+
+            canvas.create_oval(
+                center_x - radius, center_y - radius,
+                center_x + radius, center_y + radius,
+                fill="#d946ef", outline="#e980f5", width=2
+            )
+
+    def _draw_player(self, canvas, player_slot, border_offset, tile_size):
+        """Draw player marker on the canvas."""
+        player_pos = player_slot.get("position")
+        if not isinstance(player_pos, dict):
+            return
+
+        server_x, server_y = player_pos.get("x"), player_pos.get("y")
+        if server_x is None or server_y is None:
+            return
+
+        local_coords = convert_server_to_local_coords(server_x, server_y, self.game_state)
+        if not local_coords:
+            return
+
+        player_x, player_y = local_coords.get("x", -1), local_coords.get("y", -1)
+        if player_x < 0 or player_y < 0:
+            return
+
+        center_x = border_offset + player_x * tile_size + tile_size // 2
+        center_y = border_offset + player_y * tile_size + tile_size // 2
+        radius = max(tile_size // 3, 4)
+
+        canvas.create_oval(
+            center_x - radius, center_y - radius,
+            center_x + radius, center_y + radius,
+            fill="#00d4ff", outline="#33ddff", width=2
+        )
+
     def render_garden_state(self, player_slot):
         """Render the garden grid with actual tile objects."""
         slot_data = player_slot.get("data", {})
@@ -580,55 +642,9 @@ class MagicGardenGUI:
                                     self.garden_canvas, x, y, tile_size, mutations
                                 )
 
-        # Draw pets
-        pet_slot_infos = player_slot.get("petSlotInfos")
-        if isinstance(pet_slot_infos, dict):
-            for slot_info in pet_slot_infos.values():
-                if not isinstance(slot_info, dict):
-                    continue
-
-                position = slot_info.get("position")
-                if not isinstance(position, dict):
-                    continue
-
-                local_coords = convert_server_to_local_coords(
-                    position.get("x"), position.get("y"), self.game_state
-                )
-                if not local_coords:
-                    continue
-
-                local_x, local_y = local_coords.get("x"), local_coords.get("y")
-                if local_x < 0 or local_x > 22 or local_y < 0 or local_y > 11:
-                    continue
-
-                center_x = border_offset + local_x * tile_size + tile_size // 2
-                center_y = border_offset + local_y * tile_size + tile_size // 2
-                radius = max(tile_size // 3, 4)
-
-                self.garden_canvas.create_oval(
-                    center_x - radius, center_y - radius,
-                    center_x + radius, center_y + radius,
-                    fill="#d946ef", outline="#e980f5", width=2
-                )
-
-        # Draw player marker
-        player_pos = player_slot.get("position")
-        if isinstance(player_pos, dict):
-            server_x, server_y = player_pos.get("x"), player_pos.get("y")
-            if server_x is not None and server_y is not None:
-                local_coords = convert_server_to_local_coords(server_x, server_y, self.game_state)
-                if local_coords:
-                    player_x, player_y = local_coords.get("x", -1), local_coords.get("y", -1)
-                    if player_x >= 0 and player_y >= 0:
-                        center_x = border_offset + player_x * tile_size + tile_size // 2
-                        center_y = border_offset + player_y * tile_size + tile_size // 2
-                        radius = max(tile_size // 3, 4)
-
-                        self.garden_canvas.create_oval(
-                            center_x - radius, center_y - radius,
-                            center_x + radius, center_y + radius,
-                            fill="#00d4ff", outline="#33ddff", width=2
-                        )
+        # Draw overlays
+        self._draw_pets(self.garden_canvas, player_slot, border_offset, tile_size)
+        self._draw_player(self.garden_canvas, player_slot, border_offset, tile_size)
 
     def render_pet_state(self, slot_data):
         """Render the pet state in its own box"""
