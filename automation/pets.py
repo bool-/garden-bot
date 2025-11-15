@@ -425,11 +425,8 @@ async def run_pet_mover(client, game_state: GameState):
         client: MagicGardenClient instance
         game_state: Global game state
     """
-    # Wait for pet initialization first
-    await asyncio.sleep(5)
-
-    # Initialize pet positions on startup
-    await initialize_pets(client, game_state)
+    # Wait for startup task to complete pet initialization
+    await asyncio.sleep(8)
 
     while True:
         await asyncio.sleep(1)  # Send pet positions every second

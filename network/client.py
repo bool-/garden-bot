@@ -46,6 +46,7 @@ class MagicGardenClient:
         self.tasks: List[Callable] = []
         self.player_id = config.player_id
         self.cookies = config.cookies
+        self.spawn_pos = None
 
     async def authenticate(self, room_id: str) -> Tuple[Optional[Dict], Optional[str]]:
         """
@@ -437,10 +438,50 @@ class MagicGardenClient:
         self.websocket = websocket
         self.game_state["room_id"] = connected_room
 
-        # Process the welcome message
-        spawn_pos = process_welcome_message(welcome_data, self.game_state)
+        # Process the welcome message and store spawn position
+        self.spawn_pos = process_welcome_message(welcome_data, self.game_state)
 
         return True
+
+    async def _startup_task(self):
+        """
+        Handle initialization that requires receiving messages.
+        Sends initial player position to server.
+        """
+        from automation.pets import wait_for_user_slot, initialize_pets
+
+        # Wait for user slot to be populated (requires message processing to be active)
+        slot_available = True
+        spawn_pos_updated = self.spawn_pos
+
+        if self.game_state.get("user_slot_index") is None:
+            slot = await wait_for_user_slot(self.game_state, timeout=10.0)
+            slot_available = slot is not None
+            if slot_available and self.game_state.get("user_slot_index") is not None:
+                spawn_pos_updated = SPAWN_POSITIONS[
+                    self.game_state["user_slot_index"]
+                ].copy()
+
+        # Send PlayerPosition message with spawn position
+        if spawn_pos_updated and slot_available:
+            position_message = {
+                "scopePath": ["Room", "Quinoa"],
+                "type": "PlayerPosition",
+                "position": spawn_pos_updated,
+            }
+            await self.send(position_message)
+            print(
+                f"Sent spawn position to server: ({spawn_pos_updated['x']}, {spawn_pos_updated['y']})\n"
+            )
+        elif not spawn_pos_updated:
+            print("No spawn position available to send to server.\n")
+        else:
+            print(
+                "Skipped sending spawn position; user slot never became available.\n"
+            )
+
+        # Initialize pet positions
+        await initialize_pets(self, self.game_state)
 
     async def run(self):
         """
@@ -455,6 +496,7 @@ class MagicGardenClient:
             # Create task list
             tasks_to_run = [
                 self._receive_messages(),
+                self._startup_task(),
                 self._ping_task(),
             ]
 
