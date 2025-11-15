@@ -58,8 +58,6 @@ async def check_and_buy_from_shop(
         print("   No shops available")
         return
 
-    # Get configured items to buy
-    items_config = config.items_to_buy
     items_bought = 0
     total_items_in_stock = 0
 
@@ -69,10 +67,6 @@ async def check_and_buy_from_shop(
     seeds_to_buy = []
 
     if seed_inventory:
-        seeds_config = items_config.get("seeds", {})
-        seeds_enabled = seeds_config.get("enabled", False)
-        configured_seeds = seeds_config.get("items", [])
-
         # Check if we have any seeds to buy
         for item in seed_inventory:
             if not item:
@@ -85,11 +79,11 @@ async def check_and_buy_from_shop(
                 total_items_in_stock += 1
 
                 # Check if we want to buy this seed
-                if seeds_enabled and species in configured_seeds:
+                if config.seeds_enabled and species in config.seeds_to_buy:
                     print(f"   Found configured seed: {species} (Stock: {stock})")
                     seeds_to_buy.append({"species": species, "stock": stock})
                 else:
-                    if not seeds_enabled:
+                    if not config.seeds_enabled:
                         print(
                             f"   {species} (Seed) - seed buying disabled (Stock: {stock})"
                         )
@@ -102,10 +96,6 @@ async def check_and_buy_from_shop(
     eggs_to_buy = []
 
     if egg_inventory:
-        eggs_config = items_config.get("eggs", {})
-        eggs_enabled = eggs_config.get("enabled", False)
-        configured_eggs = eggs_config.get("items", [])
-
         for item in egg_inventory:
             if not item:
                 continue
@@ -117,11 +107,11 @@ async def check_and_buy_from_shop(
                 total_items_in_stock += 1
 
                 # Check if we want to buy this egg
-                if eggs_enabled and egg_id in configured_eggs:
+                if config.eggs_enabled and egg_id in config.eggs_to_buy:
                     print(f"   Found configured egg: {egg_id} (Stock: {stock})")
                     eggs_to_buy.append({"eggId": egg_id, "stock": stock})
                 else:
-                    if not eggs_enabled:
+                    if not config.eggs_enabled:
                         print(f"   {egg_id} (Egg) - egg buying disabled (Stock: {stock})")
                     else:
                         print(f"   {egg_id} (Egg) - not in config (Stock: {stock})")
