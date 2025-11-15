@@ -50,6 +50,9 @@ game_state = {
     },
 }
 
+# Lock to protect game_state from concurrent access
+game_state_lock = threading.Lock()
+
 MESSAGE_LOG_FILE = "messages.log"
 CONFIG_FILE = "bot_config.json"
 
@@ -501,25 +504,26 @@ class MagicGardenGUI:
 
     def extract_player_data(self):
         """Extract player data from full_state"""
-        if not game_state["full_state"]:
+        with game_state_lock:
+            if not game_state["full_state"]:
+                return None
+
+            our_player_id = game_state["player_id"]
+            full_state = game_state["full_state"]
+
+            # Navigate to Quinoa game state
+            if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
+                return None
+
+            quinoa_state = full_state["child"].get("data", {})
+            user_slots = quinoa_state.get("userSlots", [])
+
+            # Find our player's slot and make a deep copy to avoid race conditions
+            for slot in user_slots:
+                if slot and slot.get("playerId") == our_player_id:
+                    return deepcopy(slot)
+
             return None
-
-        our_player_id = game_state["player_id"]
-        full_state = game_state["full_state"]
-
-        # Navigate to Quinoa game state
-        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-            return None
-
-        quinoa_state = full_state["child"].get("data", {})
-        user_slots = quinoa_state.get("userSlots", [])
-
-        # Find our player's slot
-        for slot in user_slots:
-            if slot and slot.get("playerId") == our_player_id:
-                return slot
-
-        return None
 
     def render_garden_state(self, player_slot):
         """Render the garden grid with actual tile objects"""
@@ -1145,11 +1149,12 @@ class MagicGardenGUI:
 
         # Get player count from full_state
         player_count = 0
-        if game_state["full_state"]:
-            room_data = game_state["full_state"].get("data", {})
-            players = room_data.get("players", [])
-            # Count non-None players
-            player_count = sum(1 for p in players if p is not None)
+        with game_state_lock:
+            if game_state["full_state"]:
+                room_data = game_state["full_state"].get("data", {})
+                players = room_data.get("players", [])
+                # Count non-None players
+                player_count = sum(1 for p in players if p is not None)
         self.stats_player_count.set(f"{player_count}/6")
 
         # Schedule next update
@@ -1344,7 +1349,8 @@ def process_welcome_message(data):
     full_state = data["fullState"]
 
     # Store the entire fullState
-    game_state["full_state"] = deepcopy(full_state)
+    with game_state_lock:
+        game_state["full_state"] = deepcopy(full_state)
 
     # Get room data for player names
     room_data = full_state.get("data", {})
@@ -1423,26 +1429,27 @@ def process_partial_state_message(data):
     """Process PartialState messages by applying JSON patches"""
     log_message_to_file("RECEIVED (PartialState)", data)
 
-    if not game_state["full_state"]:
-        print("WARNING: Received PartialState before Welcome message")
-        return
+    with game_state_lock:
+        if not game_state["full_state"]:
+            print("WARNING: Received PartialState before Welcome message")
+            return
 
-    if "patches" not in data:
-        print("WARNING: PartialState message has no patches")
-        return
+        if "patches" not in data:
+            print("WARNING: PartialState message has no patches")
+            return
 
-    patches = data["patches"]
+        patches = data["patches"]
 
-    # Apply each patch to the fullState
-    for patch in patches:
-        try:
-            apply_json_patch(game_state["full_state"], patch)
-            game_state["statistics"]["patches_applied"] += 1
-        except Exception as e:
-            print(f"ERROR applying patch: {e}")
-            print(f"Patch: {patch}")
+        # Apply each patch to the fullState
+        for patch in patches:
+            try:
+                apply_json_patch(game_state["full_state"], patch)
+                game_state["statistics"]["patches_applied"] += 1
+            except Exception as e:
+                print(f"ERROR applying patch: {e}")
+                print(f"Patch: {patch}")
 
-    game_state["statistics"]["last_update"] = datetime.now().strftime("%H:%M:%S")
+        game_state["statistics"]["last_update"] = datetime.now().strftime("%H:%M:%S")
 
 
 def process_message(message):
@@ -1489,27 +1496,28 @@ def get_slot_base_position():
 def find_player_user_slot():
     """Return the userSlot entry for our player if it exists.
     Returns the full slot object which contains both 'data' and 'petSlotInfos' at the slot level."""
-    if not game_state["full_state"]:
+    with game_state_lock:
+        if not game_state["full_state"]:
+            return None
+
+        our_player_id = game_state["player_id"]
+        if not our_player_id:
+            return None
+
+        full_state = game_state["full_state"]
+        child_state = full_state.get("child", {})
+        if child_state.get("scope") != "Quinoa":
+            return None
+
+        quinoa_state = child_state.get("data", {})
+        user_slots = quinoa_state.get("userSlots", [])
+
+        for slot_index, slot in enumerate(user_slots):
+            if slot and slot.get("playerId") == our_player_id:
+                game_state["user_slot_index"] = slot_index
+                return deepcopy(slot)
+
         return None
-
-    our_player_id = game_state["player_id"]
-    if not our_player_id:
-        return None
-
-    full_state = game_state["full_state"]
-    child_state = full_state.get("child", {})
-    if child_state.get("scope") != "Quinoa":
-        return None
-
-    quinoa_state = child_state.get("data", {})
-    user_slots = quinoa_state.get("userSlots", [])
-
-    for slot_index, slot in enumerate(user_slots):
-        if slot and slot.get("playerId") == our_player_id:
-            game_state["user_slot_index"] = slot_index
-            return slot
-
-    return None
 
 
 async def wait_for_user_slot(require_data=False, timeout=10.0, check_interval=0.2):
@@ -1931,25 +1939,27 @@ async def find_and_harvest(websocket, slot_data, species, mode="highest", min_mu
 
 async def feed_hungry_pets(websocket):
     """Check for hungry pets and feed them with appropriate produce"""
-    if not game_state["full_state"]:
-        return
+    # Extract player slot data while holding the lock
+    with game_state_lock:
+        if not game_state["full_state"]:
+            return
 
-    our_player_id = game_state["player_id"]
-    full_state = game_state["full_state"]
+        our_player_id = game_state["player_id"]
+        full_state = game_state["full_state"]
 
-    # Navigate to Quinoa game state
-    if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-        return
+        # Navigate to Quinoa game state
+        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
+            return
 
-    quinoa_state = full_state["child"].get("data", {})
-    user_slots = quinoa_state.get("userSlots", [])
+        quinoa_state = full_state["child"].get("data", {})
+        user_slots = quinoa_state.get("userSlots", [])
 
-    # Find our player's slot
-    our_slot = None
-    for slot in user_slots:
-        if slot and slot.get("playerId") == our_player_id:
-            our_slot = slot
-            break
+        # Find our player's slot and make a deep copy
+        our_slot = None
+        for slot in user_slots:
+            if slot and slot.get("playerId") == our_player_id:
+                our_slot = deepcopy(slot)
+                break
 
     if not our_slot:
         return
@@ -2041,25 +2051,30 @@ async def check_and_buy_from_shop(websocket):
     if not shop_config or not shop_config.get("enabled", False):
         return
 
-    if not game_state["full_state"]:
-        return
+    # Extract player slot and shop data while holding the lock
+    with game_state_lock:
+        if not game_state["full_state"]:
+            return
 
-    our_player_id = game_state["player_id"]
-    full_state = game_state["full_state"]
+        our_player_id = game_state["player_id"]
+        full_state = game_state["full_state"]
 
-    # Navigate to Quinoa game state
-    if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-        return
+        # Navigate to Quinoa game state
+        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
+            return
 
-    quinoa_state = full_state["child"].get("data", {})
-    user_slots = quinoa_state.get("userSlots", [])
+        quinoa_state = full_state["child"].get("data", {})
+        user_slots = quinoa_state.get("userSlots", [])
 
-    # Find our player's slot
-    our_slot = None
-    for slot in user_slots:
-        if slot and slot.get("playerId") == our_player_id:
-            our_slot = slot
-            break
+        # Find our player's slot and make a deep copy
+        our_slot = None
+        for slot in user_slots:
+            if slot and slot.get("playerId") == our_player_id:
+                our_slot = deepcopy(slot)
+                break
+
+        # Also copy the shops data since we need it
+        shops_data = deepcopy(quinoa_state.get("shops", {}))
 
     if not our_slot:
         return
@@ -2074,9 +2089,6 @@ async def check_and_buy_from_shop(websocket):
     if current_coins <= min_coins:
         print(f"   ⚠️  Not enough coins (need to keep {min_coins:,})")
         return
-
-    # Get shops data - it's organized by shop type
-    shops_data = quinoa_state.get("shops", {})
 
     if not shops_data:
         print("   📭 No shops available")
