@@ -1090,13 +1090,14 @@ class MagicGardenGUI:
         self.stats_room_id.set(room_id)
 
         # Get player count from full_state
+        # Note: game_state["full_state"] returns a deepcopy, so it's thread-safe
         player_count = 0
-        with self.game_state.lock:
-            if self.game_state["full_state"]:
-                room_data = self.game_state["full_state"].get("data", {})
-                players = room_data.get("players", [])
-                # Count non-None players
-                player_count = sum(1 for p in players if p is not None)
+        full_state = self.game_state["full_state"]
+        if full_state:
+            room_data = full_state.get("data", {})
+            players = room_data.get("players", [])
+            # Count non-None players
+            player_count = sum(1 for p in players if p is not None)
         self.stats_player_count.set(f"{player_count}/6")
 
         # Schedule next update

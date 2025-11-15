@@ -26,33 +26,22 @@ async def check_and_buy_from_shop(
     if not config or not config.enabled:
         return
 
-    # Extract player slot and shop data while holding the lock
-    with game_state.lock:
-        if not game_state["full_state"]:
-            return
-
-        our_player_id = game_state["player_id"]
-        full_state = game_state["full_state"]
-
-        # Navigate to Quinoa game state
-        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-            return
-
-        quinoa_state = full_state["child"].get("data", {})
-        user_slots = quinoa_state.get("userSlots", [])
-
-        # Find our player's slot and make a deep copy
-        our_slot = None
-        for slot in user_slots:
-            if slot and slot.get("playerId") == our_player_id:
-                our_slot = deepcopy(slot)
-                break
-
-        # Also copy the shops data since we need it
-        shops_data = deepcopy(quinoa_state.get("shops", {}))
-
+    # Get player slot using GameState's method (handles locking internally)
+    our_slot = game_state.get_player_slot()
     if not our_slot:
         return
+
+    # Get full state (deepcopy) to extract shops data
+    full_state = game_state["full_state"]
+    if not full_state:
+        return
+
+    # Navigate to Quinoa game state to get shops
+    if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
+        return
+
+    quinoa_state = full_state["child"].get("data", {})
+    shops_data = quinoa_state.get("shops", {})
 
     slot_data = our_slot.get("data", {})
     current_coins = slot_data.get("coinsCount", 0)
@@ -154,28 +143,28 @@ async def check_and_buy_from_shop(
             await client.send(buy_message)
 
             # Optimistically update shop count in game_state
-            with game_state.lock:
-                if game_state["full_state"]:
-                    full_state = game_state["full_state"]
-                    if (
-                        "child" in full_state
-                        and full_state["child"].get("scope") == "Quinoa"
-                    ):
-                        quinoa_state = full_state["child"].get("data", {})
-                        shops = quinoa_state.get("shops", {})
-                        seed_shop = shops.get("seed", {})
-                        inventory = seed_shop.get("inventory", [])
+            def update_seed_stock(full_state):
+                if (
+                    "child" in full_state
+                    and full_state["child"].get("scope") == "Quinoa"
+                ):
+                    quinoa_state = full_state["child"].get("data", {})
+                    shops = quinoa_state.get("shops", {})
+                    seed_shop = shops.get("seed", {})
+                    inventory = seed_shop.get("inventory", [])
 
-                        for item in inventory:
-                            if item and item.get("species") == species:
-                                current_stock = item.get("initialStock", 0)
-                                if current_stock > 0:
-                                    item["initialStock"] = current_stock - 1
-                                    if i == 0:  # Only print on first purchase
-                                        print(
-                                            f"   Optimistically updating {species} stock from {current_stock}"
-                                        )
-                                break
+                    for item in inventory:
+                        if item and item.get("species") == species:
+                            current_stock = item.get("initialStock", 0)
+                            if current_stock > 0:
+                                item["initialStock"] = current_stock - 1
+                                if i == 0:  # Only print on first purchase
+                                    print(
+                                        f"   Optimistically updating {species} stock from {current_stock}"
+                                    )
+                            break
+
+            game_state.update_full_state_locked(update_seed_stock)
 
             items_bought += 1
             await asyncio.sleep(0.1)  # Small delay between purchases
@@ -199,28 +188,28 @@ async def check_and_buy_from_shop(
             await client.send(buy_message)
 
             # Optimistically update shop count in game_state
-            with game_state.lock:
-                if game_state["full_state"]:
-                    full_state = game_state["full_state"]
-                    if (
-                        "child" in full_state
-                        and full_state["child"].get("scope") == "Quinoa"
-                    ):
-                        quinoa_state = full_state["child"].get("data", {})
-                        shops = quinoa_state.get("shops", {})
-                        egg_shop = shops.get("egg", {})
-                        inventory = egg_shop.get("inventory", [])
+            def update_egg_stock(full_state):
+                if (
+                    "child" in full_state
+                    and full_state["child"].get("scope") == "Quinoa"
+                ):
+                    quinoa_state = full_state["child"].get("data", {})
+                    shops = quinoa_state.get("shops", {})
+                    egg_shop = shops.get("egg", {})
+                    inventory = egg_shop.get("inventory", [])
 
-                        for item in inventory:
-                            if item and item.get("eggId") == egg_id:
-                                current_stock = item.get("initialStock", 0)
-                                if current_stock > 0:
-                                    item["initialStock"] = current_stock - 1
-                                    if i == 0:  # Only print on first purchase
-                                        print(
-                                            f"   Optimistically updating {egg_id} stock from {current_stock}"
-                                        )
-                                break
+                    for item in inventory:
+                        if item and item.get("eggId") == egg_id:
+                            current_stock = item.get("initialStock", 0)
+                            if current_stock > 0:
+                                item["initialStock"] = current_stock - 1
+                                if i == 0:  # Only print on first purchase
+                                    print(
+                                        f"   Optimistically updating {egg_id} stock from {current_stock}"
+                                    )
+                            break
+
+            game_state.update_full_state_locked(update_egg_stock)
 
             items_bought += 1
             await asyncio.sleep(0.1)  # Small delay between purchases

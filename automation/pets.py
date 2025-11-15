@@ -34,28 +34,8 @@ def find_player_user_slot(game_state: GameState) -> Optional[Dict[str, Any]]:
     Returns:
         Player's user slot or None
     """
-    with game_state.lock:
-        if not game_state["full_state"]:
-            return None
-
-        our_player_id = game_state["player_id"]
-        if not our_player_id:
-            return None
-
-        full_state = game_state["full_state"]
-        child_state = full_state.get("child", {})
-        if child_state.get("scope") != "Quinoa":
-            return None
-
-        quinoa_state = child_state.get("data", {})
-        user_slots = quinoa_state.get("userSlots", [])
-
-        for slot_index, slot in enumerate(user_slots):
-            if slot and slot.get("playerId") == our_player_id:
-                game_state["user_slot_index"] = slot_index
-                return deepcopy(slot)
-
-        return None
+    # Use GameState's built-in method which handles locking internally
+    return game_state.get_player_slot()
 
 
 async def wait_for_user_slot(
@@ -327,28 +307,8 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
         game_state: Global game state
         config: Pet food configuration mapping
     """
-    # Extract player slot data while holding the lock
-    with game_state.lock:
-        if not game_state["full_state"]:
-            return
-
-        our_player_id = game_state["player_id"]
-        full_state = game_state["full_state"]
-
-        # Navigate to Quinoa game state
-        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-            return
-
-        quinoa_state = full_state["child"].get("data", {})
-        user_slots = quinoa_state.get("userSlots", [])
-
-        # Find our player's slot and make a deep copy
-        our_slot = None
-        for slot in user_slots:
-            if slot and slot.get("playerId") == our_player_id:
-                our_slot = deepcopy(slot)
-                break
-
+    # Get player slot using GameState's method (handles locking internally)
+    our_slot = game_state.get_player_slot()
     if not our_slot:
         return
 
