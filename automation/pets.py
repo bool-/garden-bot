@@ -142,7 +142,7 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
                 }
 
                 server_pos = convert_local_to_server_coords(
-                    game_state, local_pos["x"], local_pos["y"]
+                    local_pos["x"], local_pos["y"], game_state
                 )
                 if not server_pos:
                     continue
@@ -234,7 +234,7 @@ async def move_pets_randomly(
 
         # Convert to local coordinates for movement logic
         local_coords = convert_server_to_local_coords(
-            game_state, server_pos["x"], server_pos["y"]
+            server_pos["x"], server_pos["y"], game_state
         )
         if not local_coords:
             # If we can't convert, just use the server position as-is
@@ -275,7 +275,7 @@ async def move_pets_randomly(
 
         # Convert to server coordinates
         new_server_pos = convert_local_to_server_coords(
-            game_state, new_pos["x"], new_pos["y"]
+            new_pos["x"], new_pos["y"], game_state
         )
         if not new_server_pos:
             # Fallback to original position if conversion fails
