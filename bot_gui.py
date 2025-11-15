@@ -14,6 +14,15 @@ from copy import deepcopy
 import random
 import queue
 
+# Import game state management
+from game_state import GameState, Statistics
+
+# Global game state instance
+game_state = GameState()
+
+# Kept for backwards compatibility, but now points to game_state._lock
+game_state_lock = game_state._lock
+
 
 # Console output redirector for GUI
 class ConsoleRedirector:
@@ -45,34 +54,6 @@ SPAWN_POSITIONS = [
     {"x": 40, "y": 25},  # Slot 4: Bottom-middle (26 right, 11 down)
     {"x": 66, "y": 25},  # Slot 5: Bottom-right (52 right, 11 down)
 ]
-
-# Game state - stores full state and metadata
-game_state = {
-    "player_id": None,
-    "player_name": None,
-    "room_id": None,  # Current room ID
-    "full_state": None,  # Store entire fullState from Welcome message
-    "player_position": {
-        "x": 11,
-        "y": 11,
-    },  # Track player position (local coords: 0-22 for x, 0-11 for y)
-    "user_slot_index": None,  # Which user slot (0-5) we're in
-    "pet_positions": {},  # Track pet positions {pet_id: {"x": x, "y": y}}
-    "pet_positions_synced_with_server": False,
-    "statistics": {  # Connection statistics
-        "messages_received": 0,
-        "messages_sent": 0,
-        "pings_sent": 0,
-        "pings_received": 0,
-        "pongs_sent": 0,
-        "pongs_received": 0,
-        "last_update": "Never",
-        "patches_applied": 0,
-    },
-}
-
-# Lock to protect game_state from concurrent access
-game_state_lock = threading.Lock()
 
 MESSAGE_LOG_FILE = "messages.log"
 CONFIG_FILE = "bot_config.json"
@@ -594,26 +575,7 @@ class MagicGardenGUI:
 
     def extract_player_data(self):
         """Extract player data from full_state"""
-        with game_state_lock:
-            if not game_state["full_state"]:
-                return None
-
-            our_player_id = game_state["player_id"]
-            full_state = game_state["full_state"]
-
-            # Navigate to Quinoa game state
-            if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
-                return None
-
-            quinoa_state = full_state["child"].get("data", {})
-            user_slots = quinoa_state.get("userSlots", [])
-
-            # Find our player's slot and make a deep copy to avoid race conditions
-            for slot in user_slots:
-                if slot and slot.get("playerId") == our_player_id:
-                    return deepcopy(slot)
-
-            return None
+        return game_state.get_player_slot_data()
 
     def render_garden_state(self, player_slot):
         """Render the garden grid with actual tile objects"""
@@ -1637,7 +1599,7 @@ def process_welcome_message(data):
     print(f"Player: {game_state['player_name'] or game_state['player_id']}")
     print("=" * 60 + "\n")
 
-    game_state["statistics"]["last_update"] = datetime.now().strftime("%H:%M:%S")
+    game_state.set_stat("last_update", datetime.now().strftime("%H:%M:%S"))
 
     # Return the server spawn position
     return server_spawn_pos
@@ -1661,49 +1623,22 @@ def process_partial_state_message(data):
         # Apply each patch to the fullState
         for patch in patches:
             try:
-                apply_json_patch(game_state["full_state"], patch)
-                game_state["statistics"]["patches_applied"] += 1
+                def apply_patch(full_state):
+                    apply_json_patch(full_state, patch)
+                game_state.update_full_state_locked(apply_patch)
+                game_state.increment_stat("patches_applied")
             except Exception as e:
                 print(f"ERROR applying patch: {e}")
                 print(f"Patch: {patch}")
 
-        game_state["statistics"]["last_update"] = datetime.now().strftime("%H:%M:%S")
+        game_state.set_stat("last_update", datetime.now().strftime("%H:%M:%S"))
 
     refresh_player_metadata()
 
 
 def refresh_player_metadata():
     """Ensure cached player name and slot index reflect the latest full state."""
-    with game_state_lock:
-        full_state = game_state.get("full_state")
-        player_id = game_state.get("player_id")
-
-        if not full_state or not player_id:
-            return
-
-        # Update player name from room player list if available
-        room_data = full_state.get("data") or {}
-        players = room_data.get("players") or []
-        for player in players:
-            if player and player.get("id") == player_id:
-                player_name = player.get("name")
-                if player_name:
-                    game_state["player_name"] = player_name
-                elif not game_state.get("player_name"):
-                    game_state["player_name"] = player_id
-                break
-
-        # Update slot index from Quinoa child state if available
-        child_state = full_state.get("child") or {}
-        if child_state.get("scope") != "Quinoa":
-            return
-
-        quinoa_state = child_state.get("data") or {}
-        user_slots = quinoa_state.get("userSlots") or []
-        for idx, slot in enumerate(user_slots):
-            if slot and slot.get("playerId") == player_id:
-                game_state["user_slot_index"] = idx
-                break
+    game_state.refresh_player_metadata()
 
 
 def is_player_in_room_state(full_state, player_id):
@@ -1722,7 +1657,7 @@ def is_player_in_room_state(full_state, player_id):
 
 def process_message(message):
     try:
-        game_state["statistics"]["messages_received"] += 1
+        game_state.increment_stat("messages_received")
         data = json.loads(message)
         msg_type = data.get("type")
 
@@ -1731,10 +1666,10 @@ def process_message(message):
         elif msg_type == "PartialState":
             process_partial_state_message(data)
         elif msg_type == "Ping":
-            game_state["statistics"]["pings_received"] += 1
+            game_state.increment_stat("pings_received")
             log_message_to_file(f"RECEIVED ({msg_type})", data)
         elif msg_type == "Pong":
-            game_state["statistics"]["pongs_received"] += 1
+            game_state.increment_stat("pongs_received")
             log_message_to_file(f"RECEIVED ({msg_type})", data)
         else:
             log_message_to_file(f"RECEIVED ({msg_type})", data)
@@ -1747,7 +1682,7 @@ def process_message(message):
 
 async def send_message(websocket, message):
     await websocket.send(json.dumps(message))
-    game_state["statistics"]["messages_sent"] += 1
+    game_state.increment_stat("messages_sent")
     log_message_to_file("SENT", message)
 
 
@@ -1755,7 +1690,7 @@ async def send_ping(websocket):
     ping_id = int(datetime.now().timestamp() * 1000)
     ping_message = {"scopePath": ["Room", "Quinoa"], "type": "Ping", "id": ping_id}
     await send_message(websocket, ping_message)
-    game_state["statistics"]["pings_sent"] += 1
+    game_state.increment_stat("pings_sent")
 
 
 def get_slot_base_position():
@@ -2906,9 +2841,9 @@ async def websocket_client():
             try:
                 async for message in websocket:
                     if message.strip().lower() == "ping":
-                        game_state["statistics"]["pings_received"] += 1
+                        game_state.increment_stat("pings_received")
                         await websocket.send("pong")
-                        game_state["statistics"]["pongs_sent"] += 1
+                        game_state.increment_stat("pongs_sent")
                         log_message_to_file("SENT", "pong")
                         continue
                     process_message(message)
