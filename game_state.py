@@ -246,33 +246,6 @@ class GameState:
             return key in self._extra
 
     # Helper methods for common operations
-    def get_player_slot_data(self) -> Optional[Dict[str, Any]]:
-        """Extract player slot data from full_state
-
-        This is a common operation that navigates the game state hierarchy
-        to find the current player's slot data in the Quinoa game state.
-
-        Returns:
-            Deep copy of the player's slot data, or None if not found
-        """
-        with self._lock:
-            if not self._full_state or not self._player_id:
-                return None
-
-            # Navigate to Quinoa game state
-            if "child" not in self._full_state or self._full_state["child"].get("scope") != "Quinoa":
-                return None
-
-            quinoa_state = self._full_state["child"].get("data", {})
-            user_slots = quinoa_state.get("userSlots", [])
-
-            # Find our player's slot
-            for slot in user_slots:
-                if slot and slot.get("playerId") == self._player_id:
-                    return deepcopy(slot)
-
-            return None
-
     def refresh_player_metadata(self):
         """Update cached player name and slot index from full_state
 
@@ -328,9 +301,8 @@ class GameState:
             quinoa_state = child_state.get("data", {})
             user_slots = quinoa_state.get("userSlots", [])
 
-            for slot_index, slot in enumerate(user_slots):
+            for slot in user_slots:
                 if slot and slot.get("playerId") == self._player_id:
-                    self._user_slot_index = slot_index
                     return deepcopy(slot)
 
             return None

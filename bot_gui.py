@@ -575,7 +575,7 @@ class MagicGardenGUI:
 
     def extract_player_data(self):
         """Extract player data from full_state"""
-        return game_state.get_player_slot_data()
+        return game_state.get_player_slot()
 
     def render_garden_state(self, player_slot):
         """Render the garden grid with actual tile objects"""
