@@ -1287,9 +1287,8 @@ class MagicGardenGUI:
         self.game_stats_text.delete("1.0", tk.END)
         stats = slot_data.get("stats", {})
         player_stats_data = stats.get("player", {})
-        self.game_stats_text.insert("1.0", "Player Statistics:\n\n")
         self.game_stats_text.insert(
-            tk.END,
+            "1.0",
             f"  Crops Harvested: {player_stats_data.get('numCropsHarvested', 0):,}\n",
         )
         self.game_stats_text.insert(
