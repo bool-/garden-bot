@@ -86,6 +86,9 @@ shop_config = None
 # Harvest configuration
 harvest_config = None
 
+# Pet food mapping configuration
+pet_food_config = None
+
 
 def get_default_shop_config():
     """Return a fresh copy of the default shop configuration."""
@@ -1372,7 +1375,7 @@ def generate_player_id():
 
 def load_user_config():
     """Load single user configuration"""
-    global harvest_config, shop_config
+    global harvest_config, shop_config, pet_food_config
 
     config = {}
     if os.path.exists(CONFIG_FILE):
@@ -1404,6 +1407,17 @@ def load_user_config():
         config_dirty = True
     shop_config = normalized_shop
     print(f"Loaded shop config: Auto-buy enabled = {shop_config.get('enabled', False)}")
+
+    # Load pet food mapping
+    pet_food_mapping = config.get("pet_food_mapping")
+    if isinstance(pet_food_mapping, dict):
+        pet_food_config = pet_food_mapping
+    else:
+        # Default pet food mapping
+        pet_food_config = {"Bee": "OrangeTulip", "Chicken": "Aloe", "Worm": "Aloe"}
+        config["pet_food_mapping"] = pet_food_config
+        config_dirty = True
+    print(f"Loaded pet food mapping: {pet_food_config}")
 
     cookies = config.get("cookies")
     missing_cookie_error = None
@@ -2179,8 +2193,8 @@ async def feed_hungry_pets(websocket):
                     produce_by_species[species] = []
                 produce_by_species[species].append(item_id)
 
-    # Pet food mappings
-    pet_food_map = {"Bee": "OrangeTulip", "Chicken": "Aloe", "Worm": "Aloe"}
+    # Get pet food mappings from config (or use default if not set)
+    pet_food_map = pet_food_config if pet_food_config else {"Bee": "OrangeTulip", "Chicken": "Aloe", "Worm": "Aloe"}
 
     # Check each active pet slot
     for pet_slot in pet_slots:
