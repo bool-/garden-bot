@@ -182,14 +182,11 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
             # Find player's slot
             for slot in user_slots:
                 if slot and slot.get("playerId") == game_state.get_player_id():
-                    pet_slot_infos = slot.get("petSlotInfos", {})
-                    # Update each pet's position
+                    pet_slot_infos = slot.setdefault("petSlotInfos", {})
+                    # Update each pet's position in-place on the live dict
                     for pet_id, pos in all_pet_positions.items():
-                        if pet_id in pet_slot_infos:
-                            pet_slot_infos[pet_id]["position"] = pos
-                        else:
-                            # Initialize if doesn't exist
-                            pet_slot_infos[pet_id] = {"position": pos}
+                        entry = pet_slot_infos.setdefault(pet_id, {})
+                        entry["position"] = pos
                     break
 
         game_state.update_full_state_locked(update_pet_positions)
@@ -332,14 +329,11 @@ async def move_pets_randomly(
             # Find player's slot
             for slot in user_slots:
                 if slot and slot.get("playerId") == game_state.get_player_id():
-                    pet_slot_infos = slot.get("petSlotInfos", {})
-                    # Update each pet's position
+                    pet_slot_infos = slot.setdefault("petSlotInfos", {})
+                    # Update each pet's position in-place on the live dict
                     for pet_id, pos in all_pet_positions.items():
-                        if pet_id in pet_slot_infos:
-                            pet_slot_infos[pet_id]["position"] = pos
-                        else:
-                            # Initialize if doesn't exist
-                            pet_slot_infos[pet_id] = {"position": pos}
+                        entry = pet_slot_infos.setdefault(pet_id, {})
+                        entry["position"] = pos
                     break
 
         game_state.update_full_state_locked(update_pet_positions)
