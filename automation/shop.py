@@ -1,0 +1,261 @@
+"""
+Shop automation for Magic Garden bot.
+
+Handles automatic purchasing of configured items from shops.
+"""
+
+import asyncio
+from copy import deepcopy
+from typing import Dict, Any
+
+from game_state import GameState
+from config import ShopConfig
+
+
+async def check_and_buy_from_shop(
+    client, game_state: GameState, config: ShopConfig
+):
+    """
+    Check shop inventory and buy configured items if available.
+
+    Args:
+        client: MagicGardenClient instance
+        game_state: Global game state
+        config: Shop configuration
+    """
+    if not config or not config.enabled:
+        return
+
+    # Extract player slot and shop data while holding the lock
+    with game_state.lock:
+        if not game_state["full_state"]:
+            return
+
+        our_player_id = game_state["player_id"]
+        full_state = game_state["full_state"]
+
+        # Navigate to Quinoa game state
+        if "child" not in full_state or full_state["child"].get("scope") != "Quinoa":
+            return
+
+        quinoa_state = full_state["child"].get("data", {})
+        user_slots = quinoa_state.get("userSlots", [])
+
+        # Find our player's slot and make a deep copy
+        our_slot = None
+        for slot in user_slots:
+            if slot and slot.get("playerId") == our_player_id:
+                our_slot = deepcopy(slot)
+                break
+
+        # Also copy the shops data since we need it
+        shops_data = deepcopy(quinoa_state.get("shops", {}))
+
+    if not our_slot:
+        return
+
+    slot_data = our_slot.get("data", {})
+    current_coins = slot_data.get("coinsCount", 0)
+
+    # Check coin limits
+    min_coins = config.min_coins_to_keep
+    print(f"\nChecking shops... (Balance: {current_coins:,} coins)")
+
+    if current_coins <= min_coins:
+        print(f"   Not enough coins (need to keep {min_coins:,})")
+        return
+
+    if not shops_data:
+        print("   No shops available")
+        return
+
+    # Get configured items to buy
+    items_config = config.items_to_buy
+    items_bought = 0
+    total_items_in_stock = 0
+
+    # Check seed shop
+    seed_shop = shops_data.get("seed", {})
+    seed_inventory = seed_shop.get("inventory", [])
+    seeds_to_buy = []
+
+    if seed_inventory:
+        seeds_config = items_config.get("seeds", {})
+        seeds_enabled = seeds_config.get("enabled", False)
+        configured_seeds = seeds_config.get("items", [])
+
+        # Check if we have any seeds to buy
+        for item in seed_inventory:
+            if not item:
+                continue
+
+            species = item.get("species")
+            stock = item.get("initialStock", 0)
+
+            if stock > 0:
+                total_items_in_stock += 1
+
+                # Check if we want to buy this seed
+                if seeds_enabled and species in configured_seeds:
+                    print(f"   Found configured seed: {species} (Stock: {stock})")
+                    seeds_to_buy.append({"species": species, "stock": stock})
+                else:
+                    if not seeds_enabled:
+                        print(
+                            f"   {species} (Seed) - seed buying disabled (Stock: {stock})"
+                        )
+                    else:
+                        print(f"   {species} (Seed) - not in config (Stock: {stock})")
+
+    # Check egg shop
+    egg_shop = shops_data.get("egg", {})
+    egg_inventory = egg_shop.get("inventory", [])
+    eggs_to_buy = []
+
+    if egg_inventory:
+        eggs_config = items_config.get("eggs", {})
+        eggs_enabled = eggs_config.get("enabled", False)
+        configured_eggs = eggs_config.get("items", [])
+
+        for item in egg_inventory:
+            if not item:
+                continue
+
+            egg_id = item.get("eggId")
+            stock = item.get("initialStock", 0)
+
+            if stock > 0:
+                total_items_in_stock += 1
+
+                # Check if we want to buy this egg
+                if eggs_enabled and egg_id in configured_eggs:
+                    print(f"   Found configured egg: {egg_id} (Stock: {stock})")
+                    eggs_to_buy.append({"eggId": egg_id, "stock": stock})
+                else:
+                    if not eggs_enabled:
+                        print(f"   {egg_id} (Egg) - egg buying disabled (Stock: {stock})")
+                    else:
+                        print(f"   {egg_id} (Egg) - not in config (Stock: {stock})")
+
+    # Buy all configured seeds
+    for seed_item in seeds_to_buy:
+        species = seed_item["species"]
+        stock = seed_item["stock"]
+
+        print(f"   Purchasing {stock}x {species} seeds...")
+
+        # Buy all available stock
+        for i in range(stock):
+            buy_message = {
+                "type": "PurchaseSeed",
+                "species": species,
+                "scopePath": ["Room", "Quinoa"],
+            }
+            await client.send(buy_message)
+
+            # Optimistically update shop count in game_state
+            with game_state.lock:
+                if game_state["full_state"]:
+                    full_state = game_state["full_state"]
+                    if (
+                        "child" in full_state
+                        and full_state["child"].get("scope") == "Quinoa"
+                    ):
+                        quinoa_state = full_state["child"].get("data", {})
+                        shops = quinoa_state.get("shops", {})
+                        seed_shop = shops.get("seed", {})
+                        inventory = seed_shop.get("inventory", [])
+
+                        for item in inventory:
+                            if item and item.get("species") == species:
+                                current_stock = item.get("initialStock", 0)
+                                if current_stock > 0:
+                                    item["initialStock"] = current_stock - 1
+                                    if i == 0:  # Only print on first purchase
+                                        print(
+                                            f"   Optimistically updating {species} stock from {current_stock}"
+                                        )
+                                break
+
+            items_bought += 1
+            await asyncio.sleep(0.1)  # Small delay between purchases
+
+        print(f"   Bought {stock}x {species} seeds")
+
+    # Buy all configured eggs
+    for egg_item in eggs_to_buy:
+        egg_id = egg_item["eggId"]
+        stock = egg_item["stock"]
+
+        print(f"   Purchasing {stock}x {egg_id}...")
+
+        # Buy all available stock
+        for i in range(stock):
+            buy_message = {
+                "type": "PurchaseEgg",
+                "eggId": egg_id,
+                "scopePath": ["Room", "Quinoa"],
+            }
+            await client.send(buy_message)
+
+            # Optimistically update shop count in game_state
+            with game_state.lock:
+                if game_state["full_state"]:
+                    full_state = game_state["full_state"]
+                    if (
+                        "child" in full_state
+                        and full_state["child"].get("scope") == "Quinoa"
+                    ):
+                        quinoa_state = full_state["child"].get("data", {})
+                        shops = quinoa_state.get("shops", {})
+                        egg_shop = shops.get("egg", {})
+                        inventory = egg_shop.get("inventory", [])
+
+                        for item in inventory:
+                            if item and item.get("eggId") == egg_id:
+                                current_stock = item.get("initialStock", 0)
+                                if current_stock > 0:
+                                    item["initialStock"] = current_stock - 1
+                                    if i == 0:  # Only print on first purchase
+                                        print(
+                                            f"   Optimistically updating {egg_id} stock from {current_stock}"
+                                        )
+                                break
+
+            items_bought += 1
+            await asyncio.sleep(0.1)  # Small delay between purchases
+
+        print(f"   Bought {stock}x {egg_id}")
+
+    # Summary
+    if total_items_in_stock == 0:
+        print("   All shops are out of stock")
+    elif items_bought == 0:
+        print(f"   Found {total_items_in_stock} items in stock, but none match config")
+    else:
+        print(
+            f"   Purchased {items_bought} item(s) and returned to original position"
+        )
+
+
+async def run_shop_buyer(client, game_state: GameState, config: ShopConfig):
+    """
+    Shop auto-buy task that runs periodically.
+
+    Args:
+        client: MagicGardenClient instance
+        game_state: Global game state
+        config: Shop configuration
+    """
+    # Wait a bit before starting to allow game state to load
+    await asyncio.sleep(10)
+
+    # Get check interval from config
+    interval = config.check_interval_seconds if config else 10
+
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await check_and_buy_from_shop(client, game_state, config)
+        except Exception as e:
+            print(f"Error in shop buying task: {e}")
