@@ -733,6 +733,11 @@ class MagicGardenGUI:
                 x = start_x + col * tile_size
                 y = start_y + row * tile_size
 
+                # Initialize variables for all tiles
+                tile_obj = None
+                obj_type = None
+                slots = None
+
                 # Determine if this is a boardwalk path
                 is_boardwalk = (
                     row == 0
@@ -752,7 +757,6 @@ class MagicGardenGUI:
                     outline_color = "#5a5a6e"
 
                     # Check if there's a garden tile at this visual position
-                    tile_obj = None
                     for tid, obj in tile_objects.items():
                         if tid.isdigit():
                             obj_row, obj_col = garden_tile_to_visual(int(tid))
@@ -833,6 +837,109 @@ class MagicGardenGUI:
                     outline=outline_color,
                     width=1,
                 )
+
+                # Draw mutation indicators for plants
+                if tile_obj and obj_type == "plant" and slots:
+                    slot = slots[0]
+                    mutations = slot.get("mutations", [])
+
+                    # Check for Rainbow mutation
+                    if "Rainbow" in mutations:
+                        # Draw rainbow gradient indicator in top-right corner
+                        indicator_size = max(tile_size // 4, 3)
+                        indicator_x = x + tile_size - indicator_size - 2
+                        indicator_y = y + 2
+
+                        # Create a small rainbow effect with multiple colored stripes
+                        rainbow_colors = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#0000ff", "#4b0082"]
+                        stripe_height = max(indicator_size // len(rainbow_colors), 1)
+
+                        for i, color in enumerate(rainbow_colors):
+                            self.garden_canvas.create_rectangle(
+                                indicator_x,
+                                indicator_y + i * stripe_height,
+                                indicator_x + indicator_size,
+                                indicator_y + (i + 1) * stripe_height,
+                                fill=color,
+                                outline="",
+                            )
+
+                    # Check for Gold mutation
+                    if "Gold" in mutations:
+                        # Draw gold star/diamond indicator
+                        indicator_size = max(tile_size // 4, 3)
+                        # Position in top-left if Rainbow is present, otherwise top-right
+                        if "Rainbow" in mutations:
+                            indicator_x = x + 2
+                        else:
+                            indicator_x = x + tile_size - indicator_size - 2
+                        indicator_y = y + 2
+
+                        # Draw a gold circle/oval
+                        self.garden_canvas.create_oval(
+                            indicator_x,
+                            indicator_y,
+                            indicator_x + indicator_size,
+                            indicator_y + indicator_size,
+                            fill="#ffd700",
+                            outline="#ffed4e",
+                            width=1,
+                        )
+
+                    # Check for Wet/Chilled/Frozen states (left side indicator)
+                    water_state = None
+                    water_color = None
+                    if "Frozen" in mutations:
+                        water_state = "Frozen"
+                        water_color = "#E1F5FE"  # Ice blue/white
+                    elif "Chilled" in mutations:
+                        water_state = "Chilled"
+                        water_color = "#00BCD4"  # Cyan
+                    elif "Wet" in mutations:
+                        water_state = "Wet"
+                        water_color = "#2196F3"  # Blue
+
+                    if water_state:
+                        indicator_size = max(tile_size // 4, 3)
+                        indicator_x = x + 2
+                        indicator_y = y + tile_size // 2 - indicator_size // 2
+
+                        # Draw water/ice state indicator
+                        self.garden_canvas.create_oval(
+                            indicator_x,
+                            indicator_y,
+                            indicator_x + indicator_size,
+                            indicator_y + indicator_size,
+                            fill=water_color,
+                            outline="#FFFFFF",
+                            width=1,
+                        )
+
+                    # Check for Dawnlit/Amberlit states (bottom indicator)
+                    light_state = None
+                    light_color = None
+                    if "Amberlit" in mutations:
+                        light_state = "Amberlit"
+                        light_color = "#FFAB00"  # Amber/golden
+                    elif "Dawnlit" in mutations:
+                        light_state = "Dawnlit"
+                        light_color = "#FF6090"  # Dawn pink
+
+                    if light_state:
+                        indicator_size = max(tile_size // 4, 3)
+                        indicator_x = x + tile_size // 2 - indicator_size // 2
+                        indicator_y = y + tile_size - indicator_size - 2
+
+                        # Draw light state indicator
+                        self.garden_canvas.create_oval(
+                            indicator_x,
+                            indicator_y,
+                            indicator_x + indicator_size,
+                            indicator_y + indicator_size,
+                            fill=light_color,
+                            outline="#FFFFFF",
+                            width=1,
+                        )
 
         # Draw pets using current petSlotInfos positions
         pet_slot_infos = player_slot.get("petSlotInfos")
@@ -2202,7 +2309,7 @@ async def check_and_buy_from_shop(websocket):
                 # Check if we want to buy this seed
                 if seeds_enabled and species in configured_seeds:
                     print(f"   ✅ Found configured seed: {species} (Stock: {stock})")
-                    seeds_to_buy.append(species)
+                    seeds_to_buy.append({"species": species, "stock": stock})
                 else:
                     if not seeds_enabled:
                         print(
@@ -2236,7 +2343,7 @@ async def check_and_buy_from_shop(websocket):
                 # Check if we want to buy this egg
                 if eggs_enabled and egg_id in configured_eggs:
                     print(f"   ✅ Found configured egg: {egg_id} (Stock: {stock})")
-                    eggs_to_buy.append(egg_id)
+                    eggs_to_buy.append({"eggId": egg_id, "stock": stock})
                 else:
                     if not eggs_enabled:
                         print(
@@ -2246,34 +2353,84 @@ async def check_and_buy_from_shop(websocket):
                         print(f"   ➖ {egg_id} (Egg) - not in config (Stock: {stock})")
 
     # Buy all configured seeds
-    for species in seeds_to_buy:
-        print(f"   💳 Purchasing {species} seeds...")
+    for seed_item in seeds_to_buy:
+        species = seed_item["species"]
+        stock = seed_item["stock"]
 
-        buy_message = {
-            "type": "PurchaseSeed",
-            "species": species,
-            "scopePath": ["Room", "Quinoa"],
-        }
-        await send_message(websocket, buy_message)
+        print(f"   💳 Purchasing {stock}x {species} seeds...")
 
-        print(f"   🛒 Bought {species} seeds")
-        items_bought += 1
-        await asyncio.sleep(0.2)  # Small delay between purchases
+        # Buy all available stock
+        for i in range(stock):
+            buy_message = {
+                "type": "PurchaseSeed",
+                "species": species,
+                "scopePath": ["Room", "Quinoa"],
+            }
+            await send_message(websocket, buy_message)
+
+            # Optimistically update shop count in game_state
+            with game_state_lock:
+                if game_state["full_state"]:
+                    full_state = game_state["full_state"]
+                    if "child" in full_state and full_state["child"].get("scope") == "Quinoa":
+                        quinoa_state = full_state["child"].get("data", {})
+                        shops = quinoa_state.get("shops", {})
+                        seed_shop = shops.get("seed", {})
+                        inventory = seed_shop.get("inventory", [])
+
+                        for item in inventory:
+                            if item and item.get("species") == species:
+                                current_stock = item.get("initialStock", 0)
+                                if current_stock > 0:
+                                    item["initialStock"] = current_stock - 1
+                                    if i == 0:  # Only print on first purchase
+                                        print(f"   📉 Optimistically updating {species} stock from {current_stock}")
+                                break
+
+            items_bought += 1
+            await asyncio.sleep(0.1)  # Small delay between purchases
+
+        print(f"   🛒 Bought {stock}x {species} seeds")
 
     # Buy all configured eggs
-    for egg_id in eggs_to_buy:
-        print(f"   💳 Purchasing {egg_id}...")
+    for egg_item in eggs_to_buy:
+        egg_id = egg_item["eggId"]
+        stock = egg_item["stock"]
 
-        buy_message = {
-            "type": "PurchaseEgg",
-            "eggId": egg_id,
-            "scopePath": ["Room", "Quinoa"],
-        }
-        await send_message(websocket, buy_message)
+        print(f"   💳 Purchasing {stock}x {egg_id}...")
 
-        print(f"   🛒 Bought {egg_id}")
-        items_bought += 1
-        await asyncio.sleep(0.2)  # Small delay between purchases
+        # Buy all available stock
+        for i in range(stock):
+            buy_message = {
+                "type": "PurchaseEgg",
+                "eggId": egg_id,
+                "scopePath": ["Room", "Quinoa"],
+            }
+            await send_message(websocket, buy_message)
+
+            # Optimistically update shop count in game_state
+            with game_state_lock:
+                if game_state["full_state"]:
+                    full_state = game_state["full_state"]
+                    if "child" in full_state and full_state["child"].get("scope") == "Quinoa":
+                        quinoa_state = full_state["child"].get("data", {})
+                        shops = quinoa_state.get("shops", {})
+                        egg_shop = shops.get("egg", {})
+                        inventory = egg_shop.get("inventory", [])
+
+                        for item in inventory:
+                            if item and item.get("eggId") == egg_id:
+                                current_stock = item.get("initialStock", 0)
+                                if current_stock > 0:
+                                    item["initialStock"] = current_stock - 1
+                                    if i == 0:  # Only print on first purchase
+                                        print(f"   📉 Optimistically updating {egg_id} stock from {current_stock}")
+                                break
+
+            items_bought += 1
+            await asyncio.sleep(0.1)  # Small delay between purchases
+
+        print(f"   🛒 Bought {stock}x {egg_id}")
 
     # Summary
     if total_items_in_stock == 0:
