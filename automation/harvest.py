@@ -239,10 +239,9 @@ async def run_auto_harvest(client, game_state: GameState, config: HarvestConfig)
                 await asyncio.sleep(10)
                 continue
 
-            # Check for harvestable plants
-            # This is a placeholder - in a real implementation, you'd want to
-            # configure which species to auto-harvest
-            # For now, this task is mainly used by pet feeding
+            # NOTE: Placeholder for future auto-harvest logic.
+            # Pet feeding invokes find_and_harvest directly, so this task
+            # intentionally idles until we implement crop selection rules.
 
             await asyncio.sleep(30)  # Check every 30 seconds
 

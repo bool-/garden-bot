@@ -516,6 +516,10 @@ class MagicGardenGUI:
 
                         if obj_type == "plant":
                             slots = tile_obj.get("slots", [])
+                            if len(slots) > 1:
+                                print(
+                                    f"DEBUG: tile {tid} reported {len(slots)} plant slots; only the first will be rendered."
+                                )
                             if slots:
                                 slot = slots[0]
                                 end_time = slot.get("endTime", 0)
