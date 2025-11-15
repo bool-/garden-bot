@@ -169,6 +169,31 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
         }
         await client.send(pet_positions_message)
 
+        # Optimistically update petSlotInfos in _full_state so next read isn't stale
+        def update_pet_positions(full_state):
+            if not full_state:
+                return
+            child = full_state.get("child", {})
+            if child.get("scope") != "Quinoa":
+                return
+            quinoa_data = child.get("data", {})
+            user_slots = quinoa_data.get("userSlots", [])
+
+            # Find player's slot
+            for slot in user_slots:
+                if slot and slot.get("playerId") == game_state.get_player_id():
+                    pet_slot_infos = slot.get("petSlotInfos", {})
+                    # Update each pet's position
+                    for pet_id, pos in all_pet_positions.items():
+                        if pet_id in pet_slot_infos:
+                            pet_slot_infos[pet_id]["position"] = pos
+                        else:
+                            # Initialize if doesn't exist
+                            pet_slot_infos[pet_id] = {"position": pos}
+                    break
+
+        game_state.update_full_state_locked(update_pet_positions)
+
 
 # ========== Pet Movement ==========
 
@@ -293,6 +318,31 @@ async def move_pets_randomly(
             "petPositions": all_pet_positions,
         }
         await client.send(pet_positions_message)
+
+        # Optimistically update petSlotInfos in _full_state so next read isn't stale
+        def update_pet_positions(full_state):
+            if not full_state:
+                return
+            child = full_state.get("child", {})
+            if child.get("scope") != "Quinoa":
+                return
+            quinoa_data = child.get("data", {})
+            user_slots = quinoa_data.get("userSlots", [])
+
+            # Find player's slot
+            for slot in user_slots:
+                if slot and slot.get("playerId") == game_state.get_player_id():
+                    pet_slot_infos = slot.get("petSlotInfos", {})
+                    # Update each pet's position
+                    for pet_id, pos in all_pet_positions.items():
+                        if pet_id in pet_slot_infos:
+                            pet_slot_infos[pet_id]["position"] = pos
+                        else:
+                            # Initialize if doesn't exist
+                            pet_slot_infos[pet_id] = {"position": pos}
+                    break
+
+        game_state.update_full_state_locked(update_pet_positions)
 
 
 # ========== Pet Feeding ==========
