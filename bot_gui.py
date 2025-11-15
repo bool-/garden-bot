@@ -13,6 +13,30 @@ import traceback
 from copy import deepcopy
 import random
 
+
+# Console output redirector for GUI
+class ConsoleRedirector:
+    def __init__(self, widget, original_stream):
+        self.widget = widget
+        self.original_stream = original_stream
+
+    def write(self, message):
+        # Write to original console
+        self.original_stream.write(message)
+        self.original_stream.flush()
+
+        # Write to GUI widget (thread-safe)
+        if self.widget:
+            try:
+                self.widget.insert(tk.END, message)
+                self.widget.see(tk.END)
+            except:
+                pass  # Ignore errors if widget is destroyed
+
+    def flush(self):
+        self.original_stream.flush()
+
+
 # Spawn positions - server coordinates for spawning (determines which garden you get)
 # Ordered left-to-right, top-to-bottom (slot 0-5)
 # Local (0,0) maps to base position. Slots offset by 26 right and 11 down
@@ -253,19 +277,70 @@ def parse_command_line_args():
 class MagicGardenGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Magic Garden Bot")
-        self.root.geometry("1200x750")
-        self.root.configure(bg="#2b2b2b")
+        self.root.title("🌻 Magic Garden Bot")
+        self.root.geometry("1250x800")
 
-        # Style
+        # Modern color palette
+        self.colors = {
+            "bg_dark": "#0f0f1e",           # Deep navy background
+            "bg_medium": "#1a1a2e",         # Medium navy
+            "bg_light": "#25254a",          # Lighter navy/purple
+            "accent_primary": "#6c5ce7",    # Vibrant purple
+            "accent_secondary": "#00b894",  # Teal green
+            "accent_tertiary": "#fd79a8",   # Pink
+            "text_primary": "#e8e8f0",      # Off-white
+            "text_secondary": "#a0a0c0",    # Muted purple-gray
+            "success": "#00e676",           # Bright green
+            "warning": "#ffd93d",           # Golden yellow
+            "error": "#ff6b9d",             # Pink-red
+            "canvas_bg": "#16162a",         # Canvas background
+        }
+
+        self.root.configure(bg=self.colors["bg_dark"])
+
+        # Modern Style
         style = ttk.Style()
         style.theme_use("clam")
-        style.configure("TFrame", background="#2b2b2b")
+
+        # Frame styles
+        style.configure("TFrame", background=self.colors["bg_dark"])
+        style.configure("Card.TFrame", background=self.colors["bg_medium"], relief="flat")
+
+        # Label styles
         style.configure(
-            "TLabel", background="#2b2b2b", foreground="white", font=("Arial", 10)
+            "TLabel",
+            background=self.colors["bg_dark"],
+            foreground=self.colors["text_primary"],
+            font=("Segoe UI", 10)
         )
         style.configure(
-            "Title.TLabel", font=("Arial", 16, "bold"), foreground="#4CAF50"
+            "Title.TLabel",
+            font=("Segoe UI", 16, "bold"),
+            foreground=self.colors["accent_primary"]
+        )
+        style.configure(
+            "Subtitle.TLabel",
+            font=("Segoe UI", 11, "bold"),
+            foreground=self.colors["accent_secondary"]
+        )
+        style.configure(
+            "Small.TLabel",
+            font=("Segoe UI", 8),
+            foreground=self.colors["text_secondary"]
+        )
+
+        # LabelFrame styles
+        style.configure(
+            "TLabelframe",
+            background=self.colors["bg_medium"],
+            borderwidth=2,
+            relief="solid"
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=self.colors["bg_medium"],
+            foreground=self.colors["accent_primary"],
+            font=("Segoe UI", 10, "bold")
         )
 
         self.setup_ui()
@@ -282,195 +357,194 @@ class MagicGardenGUI:
 
         # LEFT COLUMN - Garden Visualization
         left_column = ttk.Frame(content_frame)
-        left_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10))
+        left_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 15))
 
-        # Player Info (compact, at top of left column)
-        info_frame = ttk.LabelFrame(left_column, text="Player Info", padding="5")
-        info_frame.pack(fill=tk.X, pady=(0, 5))
+        # Connection & Player Info Panel (consolidated)
+        info_frame = ttk.LabelFrame(left_column, text="👤 Player & Connection", padding="12")
+        info_frame.pack(fill=tk.X, pady=(0, 10))
 
         self.player_id_var = tk.StringVar(value="Unknown")
         self.player_name_var = tk.StringVar(value="Unknown")
-
-        ttk.Label(info_frame, text="ID:", font=("Arial", 8)).grid(
-            row=0, column=0, sticky=tk.W, padx=2, pady=1
-        )
-        ttk.Label(info_frame, textvariable=self.player_id_var, font=("Arial", 8)).grid(
-            row=0, column=1, sticky=tk.W, pady=1
-        )
-
-        ttk.Label(info_frame, text="Name:", font=("Arial", 8)).grid(
-            row=1, column=0, sticky=tk.W, padx=2, pady=1
-        )
-        ttk.Label(
-            info_frame, textvariable=self.player_name_var, font=("Arial", 8)
-        ).grid(row=1, column=1, sticky=tk.W, pady=1)
-
-        # Garden Canvas
-        garden_frame = ttk.LabelFrame(left_column, text="🌻 Garden View", padding="10")
-        garden_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
-
-        # Canvas sized for 12 rows x 23 cols grid
-        # Using 25 pixels per tile for better visibility
-        self.garden_canvas = tk.Canvas(
-            garden_frame,
-            width=650,  # 23 cols * ~25px + margins
-            height=400,  # 12 rows * ~25px + title/legend space
-            bg="#1a1a1a",
-            highlightthickness=1,
-            highlightbackground="#4CAF50",
-        )
-        self.garden_canvas.pack()
-
-        # Garden stats summary - create canvas for legend with actual colors
-        stats_summary_frame = ttk.Frame(left_column)
-        stats_summary_frame.pack(fill=tk.X, pady=(5, 0))
-
-        # Create a canvas for the legend
-        self.legend_canvas = tk.Canvas(
-            stats_summary_frame,
-            height=25,
-            bg="#2b2b2b",
-            highlightthickness=0,
-        )
-        self.legend_canvas.pack(fill=tk.X)
-
-        # Statistics - Two Column Layout (under garden)
-        stats_frame = ttk.LabelFrame(left_column, text="📡 Connection", padding="10")
-        stats_frame.pack(fill=tk.X, pady=(5, 0))
-
-        # Create StringVars for dynamic updates
         self.stats_room_id = tk.StringVar(value="Unknown")
-        self.stats_player_count = tk.StringVar(value="0")
+        self.stats_player_count = tk.StringVar(value="0/6")
+        self.stats_ping = tk.StringVar(value="0")
+        self.stats_pong = tk.StringVar(value="0")
         self.stats_messages_sent = tk.StringVar(value="0")
         self.stats_messages_received = tk.StringVar(value="0")
-        self.stats_pings_sent = tk.StringVar(value="0")
-        self.stats_pings_received = tk.StringVar(value="0")
-        self.stats_pongs_sent = tk.StringVar(value="0")
-        self.stats_pongs_received = tk.StringVar(value="0")
         self.stats_patches_applied = tk.StringVar(value="0")
         self.stats_last_update = tk.StringVar(value="Never")
 
-        # Room Info
-        ttk.Label(stats_frame, text="Room ID:", font=("Arial", 8, "bold")).grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 5), pady=1
+        # Row 0: Player info
+        ttk.Label(info_frame, text="Player:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=0, column=0, sticky=tk.W, padx=(0, 8), pady=3
         )
-        ttk.Label(stats_frame, textvariable=self.stats_room_id, font=("Arial", 8)).grid(
-            row=0, column=1, sticky=tk.W, pady=1
+        ttk.Label(info_frame, textvariable=self.player_name_var, font=("Segoe UI", 9)).grid(
+            row=0, column=1, sticky=tk.W, pady=3
         )
 
-        ttk.Label(stats_frame, text="Players:", font=("Arial", 8, "bold")).grid(
-            row=0, column=2, sticky=tk.W, padx=(15, 5), pady=1
+        ttk.Label(info_frame, text="ID:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=0, column=2, sticky=tk.W, padx=(20, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_player_count, font=("Arial", 8)
-        ).grid(row=0, column=3, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.player_id_var, font=("Segoe UI", 9)).grid(
+            row=0, column=3, sticky=tk.W, pady=3
+        )
 
-        # Left column stats
-        ttk.Label(stats_frame, text="Messages Sent:", font=("Arial", 8)).grid(
-            row=1, column=0, sticky=tk.W, padx=(0, 5), pady=1
+        # Row 1: Room info
+        ttk.Label(info_frame, text="Room:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=1, column=0, sticky=tk.W, padx=(0, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_messages_sent, font=("Arial", 8)
-        ).grid(row=1, column=1, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_room_id, font=("Segoe UI", 9)).grid(
+            row=1, column=1, sticky=tk.W, pady=3
+        )
 
-        ttk.Label(stats_frame, text="Messages Received:", font=("Arial", 8)).grid(
-            row=2, column=0, sticky=tk.W, padx=(0, 5), pady=1
+        ttk.Label(info_frame, text="Players:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=1, column=2, sticky=tk.W, padx=(20, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_messages_received, font=("Arial", 8)
-        ).grid(row=2, column=1, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_player_count, font=("Segoe UI", 9)).grid(
+            row=1, column=3, sticky=tk.W, pady=3
+        )
 
-        ttk.Label(stats_frame, text="Pings Sent:", font=("Arial", 8)).grid(
-            row=3, column=0, sticky=tk.W, padx=(0, 5), pady=1
+        # Row 2: Network stats
+        ttk.Label(info_frame, text="Ping/Pong:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=2, column=0, sticky=tk.W, padx=(0, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_pings_sent, font=("Arial", 8)
-        ).grid(row=3, column=1, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_ping, font=("Segoe UI", 9)).grid(
+            row=2, column=1, sticky=tk.W, pady=3
+        )
 
-        ttk.Label(stats_frame, text="Pings Received:", font=("Arial", 8)).grid(
-            row=4, column=0, sticky=tk.W, padx=(0, 5), pady=1
+        ttk.Label(info_frame, text="Messages:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=2, column=2, sticky=tk.W, padx=(20, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_pings_received, font=("Arial", 8)
-        ).grid(row=4, column=1, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_messages_sent, font=("Segoe UI", 9)).grid(
+            row=2, column=3, sticky=tk.W, pady=3
+        )
 
-        # Right column stats
-        ttk.Label(stats_frame, text="Pongs Sent:", font=("Arial", 8)).grid(
-            row=1, column=2, sticky=tk.W, padx=(15, 5), pady=1
+        # Row 3: Updates
+        ttk.Label(info_frame, text="Patches:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=3, column=0, sticky=tk.W, padx=(0, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_pongs_sent, font=("Arial", 8)
-        ).grid(row=1, column=3, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_patches_applied, font=("Segoe UI", 9)).grid(
+            row=3, column=1, sticky=tk.W, pady=3
+        )
 
-        ttk.Label(stats_frame, text="Pongs Received:", font=("Arial", 8)).grid(
-            row=2, column=2, sticky=tk.W, padx=(15, 5), pady=1
+        ttk.Label(info_frame, text="Last Update:", font=("Segoe UI", 9, "bold"),
+                 foreground=self.colors["accent_secondary"]).grid(
+            row=3, column=2, sticky=tk.W, padx=(20, 8), pady=3
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_pongs_received, font=("Arial", 8)
-        ).grid(row=2, column=3, sticky=tk.W, pady=1)
+        ttk.Label(info_frame, textvariable=self.stats_last_update, font=("Segoe UI", 9)).grid(
+            row=3, column=3, sticky=tk.W, pady=3
+        )
 
-        ttk.Label(stats_frame, text="Patches Applied:", font=("Arial", 8)).grid(
-            row=3, column=2, sticky=tk.W, padx=(15, 5), pady=1
-        )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_patches_applied, font=("Arial", 8)
-        ).grid(row=3, column=3, sticky=tk.W, pady=1)
+        # Garden Canvas with legend inside
+        garden_frame = ttk.LabelFrame(left_column, text="🌻 Garden View", padding="0")
+        garden_frame.pack(fill=tk.X, expand=False, pady=(0, 10))
 
-        ttk.Label(stats_frame, text="Last Update:", font=("Arial", 8)).grid(
-            row=4, column=2, sticky=tk.W, padx=(15, 5), pady=1
+        # Canvas sized EXACTLY for 12 rows x 23 cols grid
+        # 28 pixels per tile + 4 for labelframe border (2 on each side)
+        self.garden_canvas = tk.Canvas(
+            garden_frame,
+            width=23 * 28 + 4,  # 648 - exactly 23 cols + borders
+            height=12 * 28 + 4,  # 340 - exactly 12 rows + borders
+            bg=self.colors["canvas_bg"],
+            highlightthickness=0,
         )
-        ttk.Label(
-            stats_frame, textvariable=self.stats_last_update, font=("Arial", 8)
-        ).grid(row=4, column=3, sticky=tk.W, pady=1)
+        self.garden_canvas.pack()
+
+        # Create a canvas for the legend - INSIDE garden_frame
+        self.legend_canvas = tk.Canvas(
+            garden_frame,
+            height=30,
+            width=23 * 28 + 4,
+            bg=self.colors["bg_medium"],
+            highlightthickness=0,
+        )
+        self.legend_canvas.pack()
+
+        # Console Log
+        log_frame = ttk.LabelFrame(left_column, text="📜 Console Log", padding="12")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+
+        self.console_log = scrolledtext.ScrolledText(
+            log_frame,
+            height=10,
+            width=50,
+            bg=self.colors["bg_light"],
+            fg=self.colors["text_primary"],
+            font=("Consolas", 8),
+            wrap=tk.WORD,
+            insertbackground=self.colors["accent_primary"],
+            selectbackground=self.colors["accent_primary"],
+            selectforeground=self.colors["text_primary"],
+        )
+        self.console_log.pack(fill=tk.BOTH, expand=True)
+
+        # Redirect stdout to console log
+        sys.stdout = ConsoleRedirector(self.console_log, sys.stdout)
 
         # RIGHT COLUMN - Text Info
         right_column = ttk.Frame(content_frame)
         right_column.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         # Pet State
-        pet_frame = ttk.LabelFrame(right_column, text="🐾 Pet State", padding="10")
-        pet_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 5))
+        pet_frame = ttk.LabelFrame(right_column, text="🐾 Pet State", padding="12")
+        pet_frame.pack(fill=tk.BOTH, expand=False, pady=(0, 10))
 
         self.pet_text = scrolledtext.ScrolledText(
             pet_frame,
             height=12,
             width=50,
-            bg="#1e1e1e",
-            fg="white",
+            bg=self.colors["bg_light"],
+            fg=self.colors["text_primary"],
             font=("Consolas", 9),
             wrap=tk.WORD,
+            insertbackground=self.colors["accent_primary"],
+            selectbackground=self.colors["accent_primary"],
+            selectforeground=self.colors["text_primary"],
         )
         self.pet_text.pack(fill=tk.BOTH, expand=True)
 
         # Inventory
-        inv_frame = ttk.LabelFrame(right_column, text="🎒 Inventory", padding="10")
-        inv_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5))
+        inv_frame = ttk.LabelFrame(right_column, text="🎒 Inventory", padding="12")
+        inv_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         self.inventory_text = scrolledtext.ScrolledText(
             inv_frame,
             height=15,
             width=50,
-            bg="#1e1e1e",
-            fg="white",
+            bg=self.colors["bg_light"],
+            fg=self.colors["text_primary"],
             font=("Consolas", 9),
             wrap=tk.WORD,
+            insertbackground=self.colors["accent_primary"],
+            selectbackground=self.colors["accent_primary"],
+            selectforeground=self.colors["text_primary"],
         )
         self.inventory_text.pack(fill=tk.BOTH, expand=True)
 
         # Game Stats (separate box)
         game_stats_frame = ttk.LabelFrame(
-            right_column, text="📊 Game Stats", padding="10"
+            right_column, text="📊 Game Stats", padding="12"
         )
-        game_stats_frame.pack(fill=tk.X, pady=(0, 5))
+        game_stats_frame.pack(fill=tk.X, pady=(0, 0))
 
         self.game_stats_text = scrolledtext.ScrolledText(
             game_stats_frame,
             height=7,
             width=50,
-            bg="#1e1e1e",
-            fg="white",
+            bg=self.colors["bg_light"],
+            fg=self.colors["text_primary"],
             font=("Consolas", 9),
             wrap=tk.WORD,
+            insertbackground=self.colors["accent_primary"],
+            selectbackground=self.colors["accent_primary"],
+            selectforeground=self.colors["text_primary"],
         )
         self.game_stats_text.pack(fill=tk.BOTH, expand=True)
 
@@ -478,29 +552,38 @@ class MagicGardenGUI:
         """Draw the color legend with actual matching colors"""
         self.legend_canvas.delete("all")
 
-        # Legend items with actual colors used in garden
+        # Legend items with vibrant colors
         legend_items = [
-            ("#2196F3", "You"),
-            ("#4CAF50", "Ready Plant"),
-            ("#FF9800", "Grown Plant"),
-            ("#FFC107", "Growing Plant"),
-            ("#81C784", "Ready Egg"),
-            ("#FFD54F", "Growing Egg"),
-            ("#9C27B0", "Pet"),
-            ("#424242", "Empty"),
+            ("#00d4ff", "You"),
+            ("#00e676", "Ready"),
+            ("#ff9100", "Grown"),
+            ("#ffd93d", "Growing"),
+            ("#69f0ae", "Ready Egg"),
+            ("#ffeb3b", "Growing Egg"),
+            ("#d946ef", "Pet"),
+            ("#4a4a5e", "Empty"),
         ]
 
-        x_pos = 5
+        x_pos = 10
+        y_center = 15
         for color, label in legend_items:
-            # Draw color square
+            # Draw color square with rounded effect
             self.legend_canvas.create_rectangle(
-                x_pos, 5, x_pos + 12, 18, fill=color, outline="white", width=1
+                x_pos, y_center - 6, x_pos + 14, y_center + 6,
+                fill=color, outline=self.colors["accent_primary"], width=1
             )
-            # Draw label
+            # Draw label with new font
             self.legend_canvas.create_text(
-                x_pos + 16, 12, text=label, fill="white", font=("Arial", 7), anchor="w"
+                x_pos + 18, y_center, text=label,
+                fill=self.colors["text_primary"],
+                font=("Segoe UI", 8), anchor="w"
             )
-            x_pos += 78
+            x_pos += 84
+
+    def log_to_console(self, message):
+        """Add a message to the console log widget"""
+        self.console_log.insert(tk.END, message + "\n")
+        self.console_log.see(tk.END)  # Auto-scroll to bottom
 
     def extract_player_data(self):
         """Extract player data from full_state"""
@@ -551,28 +634,16 @@ class MagicGardenGUI:
         # +1 left border, +1 middle path, +1 right border
         visual_cols = garden_cols + 3  # 23 total
 
-        # Calculate tile size to fit canvas
-        margin = 20
-        available_width = canvas_width - (2 * margin)
-        available_height = canvas_height - 60  # Reserve space for title and legend
+        # Calculate tile size to fill entire canvas
+        tile_size_width = canvas_width // visual_cols
+        tile_size_height = canvas_height // visual_rows
 
-        tile_size = min(available_width // visual_cols, available_height // visual_rows)
-
-        # Ensure minimum tile size for visibility
-        tile_size = max(tile_size, 20)
+        # Use the smaller dimension to ensure grid fits entirely
+        tile_size = min(tile_size_width, tile_size_height)
 
         # Draw background
         self.garden_canvas.create_rectangle(
-            0, 0, canvas_width, canvas_height, fill="#1a1a1a", outline=""
-        )
-
-        # Title
-        self.garden_canvas.create_text(
-            canvas_width / 2,
-            15,
-            text=f"Garden Grid (2×10×10 + Boardwalk)",
-            fill="#4CAF50",
-            font=("Arial", 12, "bold"),
+            0, 0, canvas_width, canvas_height, fill=self.colors["canvas_bg"], outline=""
         )
 
         # Stats
@@ -597,11 +668,10 @@ class MagicGardenGUI:
 
         empty_count = 200 - total_tiles
 
-        # Center the grid
-        grid_width = visual_cols * tile_size
-        grid_height = visual_rows * tile_size
-        start_x = (canvas_width - grid_width) // 2
-        start_y = 35
+        # Position the grid - offset by labelframe border width
+        border_offset = 2
+        start_x = border_offset
+        start_y = border_offset
 
         # Get player position from server state
         player_server_pos = player_slot.get("position")
@@ -673,13 +743,13 @@ class MagicGardenGUI:
                 )
 
                 if is_boardwalk:
-                    # Boardwalk path - brown/tan color (no items rendered)
-                    fill_color = "#8B7355"
-                    outline_color = "#A0826D"
+                    # Boardwalk path - warmer brown/tan color
+                    fill_color = "#a0826d"
+                    outline_color = "#b8956f"
                 else:
-                    # Default empty garden tile
-                    fill_color = "#424242"
-                    outline_color = "#555555"
+                    # Default empty garden tile - dark purple-gray
+                    fill_color = "#4a4a5e"
+                    outline_color = "#5a5a6e"
 
                     # Check if there's a garden tile at this visual position
                     tile_obj = None
@@ -714,36 +784,36 @@ class MagicGardenGUI:
                                 if current_time >= end_time:
                                     # Mature - check mutations
                                     if mutation_count >= min_mutations:
-                                        # Ready to harvest - bright green
-                                        fill_color = "#4CAF50"
-                                        outline_color = "#66BB6A"
+                                        # Ready to harvest - vibrant bright green
+                                        fill_color = "#00e676"
+                                        outline_color = "#1fec84"
                                     else:
-                                        # Grown but not fully mutated - orange
-                                        fill_color = "#FF9800"
-                                        outline_color = "#FFB74D"
+                                        # Grown but not fully mutated - vibrant orange
+                                        fill_color = "#ff9100"
+                                        outline_color = "#ffa726"
                                 else:
-                                    # Growing - yellow
-                                    fill_color = "#FFC107"
-                                    outline_color = "#FFCA28"
+                                    # Growing - golden yellow
+                                    fill_color = "#ffd93d"
+                                    outline_color = "#ffe066"
                             else:
                                 # Empty plant slot
-                                fill_color = "#555555"
-                                outline_color = "#777777"
+                                fill_color = "#5a5a6e"
+                                outline_color = "#6a6a7e"
                         elif obj_type == "egg":
                             # Egg - check if mature
                             matured_at = tile_obj.get("maturedAt", 0)
                             if current_time >= matured_at:
-                                # Mature egg (ready) - lighter green
-                                fill_color = "#81C784"
-                                outline_color = "#A5D6A7"
+                                # Mature egg (ready) - bright mint green
+                                fill_color = "#69f0ae"
+                                outline_color = "#7ff5bb"
                             else:
-                                # Growing egg - slightly lighter yellow
-                                fill_color = "#FFD54F"
-                                outline_color = "#FFE082"
+                                # Growing egg - bright yellow
+                                fill_color = "#ffeb3b"
+                                outline_color = "#fff176"
                         elif obj_type == "pet":
-                            # Pet on tile - purple
-                            fill_color = "#9C27B0"
-                            outline_color = "#BA68C8"
+                            # Pet on tile - vibrant magenta/purple
+                            fill_color = "#d946ef"
+                            outline_color = "#e469f2"
                         elif obj_type == "decor":
                             # Decoration - blue/gray
                             fill_color = "#607D8B"
@@ -801,8 +871,8 @@ class MagicGardenGUI:
                     center_y - radius,
                     center_x + radius,
                     center_y + radius,
-                    fill="#9C27B0",
-                    outline="#BA68C8",
+                    fill="#d946ef",
+                    outline="#e980f5",
                     width=2,
                 )
 
@@ -814,7 +884,7 @@ class MagicGardenGUI:
             player_pixel_x = start_x + player_x * tile_size
             player_pixel_y = start_y + player_y * tile_size
 
-            # Draw blue circle for player
+            # Draw bright cyan circle for player
             center_x = player_pixel_x + tile_size // 2
             center_y = player_pixel_y + tile_size // 2
             radius = max(tile_size // 3, 4)
@@ -823,8 +893,8 @@ class MagicGardenGUI:
                 center_y - radius,
                 center_x + radius,
                 center_y + radius,
-                fill="#2196F3",
-                outline="#BBDEFB",
+                fill="#00d4ff",
+                outline="#33ddff",
                 width=2,
             )
 
@@ -935,11 +1005,11 @@ class MagicGardenGUI:
             self.inventory_text.insert("1.0", "Waiting for game state...\n")
             self.garden_canvas.delete("all")
             self.garden_canvas.create_text(
-                250,
-                250,
+                330,
+                205,
                 text="Waiting for game state...",
-                fill="white",
-                font=("Arial", 14),
+                fill=self.colors["text_secondary"],
+                font=("Segoe UI", 14),
             )
             self.pet_text.delete("1.0", tk.END)
             self.pet_text.insert("1.0", "Waiting for game state...\n")
@@ -1134,13 +1204,16 @@ class MagicGardenGUI:
 
         # Update statistics using StringVars
         stats = game_state["statistics"]
-        self.stats_messages_sent.set(str(stats["messages_sent"]))
-        self.stats_messages_received.set(str(stats["messages_received"]))
-        self.stats_pings_sent.set(str(stats["pings_sent"]))
-        self.stats_pings_received.set(str(stats["pings_received"]))
-        self.stats_pongs_sent.set(str(stats["pongs_sent"]))
-        self.stats_pongs_received.set(str(stats["pongs_received"]))
-        self.stats_patches_applied.set(str(stats["patches_applied"]))
+        sent = stats["messages_sent"]
+        received = stats["messages_received"]
+        self.stats_messages_sent.set(f"↑{sent:,} / ↓{received:,}")
+
+        # Combine ping/pong into one stat
+        pings = stats["pings_sent"]
+        pongs = stats["pongs_received"]
+        self.stats_ping.set(f"↑{pings:,} / ↓{pongs:,}")
+
+        self.stats_patches_applied.set(f"{stats['patches_applied']:,}")
         self.stats_last_update.set(stats["last_update"])
 
         # Update room info
@@ -1462,6 +1535,12 @@ def process_message(message):
             process_welcome_message(data)
         elif msg_type == "PartialState":
             process_partial_state_message(data)
+        elif msg_type == "Ping":
+            game_state["statistics"]["pings_received"] += 1
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
+        elif msg_type == "Pong":
+            game_state["statistics"]["pongs_received"] += 1
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
         else:
             log_message_to_file(f"RECEIVED ({msg_type})", data)
 
@@ -2512,6 +2591,7 @@ async def websocket_client():
             try:
                 async for message in websocket:
                     if message.strip().lower() == "ping":
+                        game_state["statistics"]["pings_received"] += 1
                         await websocket.send("pong")
                         game_state["statistics"]["pongs_sent"] += 1
                         log_message_to_file("SENT", "pong")
