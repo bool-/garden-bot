@@ -1904,17 +1904,29 @@ async def move_pets_randomly(websocket, wait_timeout=10.0):
         new_pos = pos.copy()
 
         if move_chance < 0.2:  # 20% chance to move per update
-            # Choose random direction (up, down, left, right)
-            direction = random.choice(["up", "down", "left", "right"])
+            # Build list of valid directions (away from walls)
+            valid_directions = []
+            if pos["y"] > MIN_Y:
+                valid_directions.append("up")
+            if pos["y"] < MAX_Y:
+                valid_directions.append("down")
+            if pos["x"] > MIN_X:
+                valid_directions.append("left")
+            if pos["x"] < MAX_X:
+                valid_directions.append("right")
 
-            if direction == "up" and pos["y"] > MIN_Y:
-                new_pos["y"] -= 1
-            elif direction == "down" and pos["y"] < MAX_Y:
-                new_pos["y"] += 1
-            elif direction == "left" and pos["x"] > MIN_X:
-                new_pos["x"] -= 1
-            elif direction == "right" and pos["x"] < MAX_X:
-                new_pos["x"] += 1
+            # If there are valid directions, choose one and move
+            if valid_directions:
+                direction = random.choice(valid_directions)
+
+                if direction == "up":
+                    new_pos["y"] -= 1
+                elif direction == "down":
+                    new_pos["y"] += 1
+                elif direction == "left":
+                    new_pos["x"] -= 1
+                elif direction == "right":
+                    new_pos["x"] += 1
 
         # Convert to server coordinates
         new_server_pos = convert_local_to_server_coords(new_pos["x"], new_pos["y"])
