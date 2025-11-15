@@ -12,12 +12,13 @@ import threading
 import traceback
 from copy import deepcopy
 import random
+import queue
 
 
 # Console output redirector for GUI
 class ConsoleRedirector:
-    def __init__(self, widget, original_stream):
-        self.widget = widget
+    def __init__(self, message_queue, original_stream):
+        self.message_queue = message_queue
         self.original_stream = original_stream
 
     def write(self, message):
@@ -25,13 +26,9 @@ class ConsoleRedirector:
         self.original_stream.write(message)
         self.original_stream.flush()
 
-        # Write to GUI widget (thread-safe)
-        if self.widget:
-            try:
-                self.widget.insert(tk.END, message)
-                self.widget.see(tk.END)
-            except:
-                pass  # Ignore errors if widget is destroyed
+        # Queue message for GUI thread to process
+        if self.message_queue:
+            self.message_queue.put(message)
 
     def flush(self):
         self.original_stream.flush()
@@ -488,8 +485,10 @@ class MagicGardenGUI:
         )
         self.console_log.pack(fill=tk.BOTH, expand=True)
 
-        # Redirect stdout to console log
-        sys.stdout = ConsoleRedirector(self.console_log, sys.stdout)
+        # Redirect stdout to console log using a thread-safe queue
+        self.console_queue = queue.Queue()
+        sys.stdout = ConsoleRedirector(self.console_queue, sys.stdout)
+        self.root.after(50, self.process_console_queue)
 
         # RIGHT COLUMN - Text Info
         right_column = ttk.Frame(content_frame)
@@ -1101,11 +1100,30 @@ class MagicGardenGUI:
         # Restore scroll position
         self.pet_text.yview_moveto(scroll_pos[0])
 
+    def process_console_queue(self):
+        """Append queued console output on the GUI thread."""
+        try:
+            while True:
+                message = self.console_queue.get_nowait()
+                self.console_log.insert(tk.END, message)
+                self.console_log.see(tk.END)
+        except queue.Empty:
+            pass
+        except tk.TclError:
+            return  # Widget destroyed during shutdown
+
+        try:
+            self.root.after(50, self.process_console_queue)
+        except tk.TclError:
+            pass
+
     def update_ui(self):
         """Update UI with current game state"""
         # Player info
-        self.player_id_var.set(game_state["player_id"] or "Unknown")
-        self.player_name_var.set(game_state["player_name"] or "Unknown")
+        player_id = game_state.get("player_id")
+        self.player_id_var.set(player_id or "Unknown")
+        display_name = game_state.get("player_name") or player_id or "Unknown"
+        self.player_name_var.set(display_name)
 
         # Extract player data from full_state
         player_slot = self.extract_player_data()
