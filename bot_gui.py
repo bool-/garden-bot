@@ -1568,6 +1568,8 @@ def process_welcome_message(data):
     with game_state_lock:
         game_state["full_state"] = deepcopy(full_state)
 
+    refresh_player_metadata()
+
     # Get room data for player names
     room_data = full_state.get("data", {})
 
@@ -1666,6 +1668,56 @@ def process_partial_state_message(data):
                 print(f"Patch: {patch}")
 
         game_state["statistics"]["last_update"] = datetime.now().strftime("%H:%M:%S")
+
+    refresh_player_metadata()
+
+
+def refresh_player_metadata():
+    """Ensure cached player name and slot index reflect the latest full state."""
+    with game_state_lock:
+        full_state = game_state.get("full_state")
+        player_id = game_state.get("player_id")
+
+        if not full_state or not player_id:
+            return
+
+        # Update player name from room player list if available
+        room_data = full_state.get("data") or {}
+        players = room_data.get("players") or []
+        for player in players:
+            if player and player.get("id") == player_id:
+                player_name = player.get("name")
+                if player_name:
+                    game_state["player_name"] = player_name
+                elif not game_state.get("player_name"):
+                    game_state["player_name"] = player_id
+                break
+
+        # Update slot index from Quinoa child state if available
+        child_state = full_state.get("child") or {}
+        if child_state.get("scope") != "Quinoa":
+            return
+
+        quinoa_state = child_state.get("data") or {}
+        user_slots = quinoa_state.get("userSlots") or []
+        for idx, slot in enumerate(user_slots):
+            if slot and slot.get("playerId") == player_id:
+                game_state["user_slot_index"] = idx
+                break
+
+
+def is_player_in_room_state(full_state, player_id):
+    """Return True if the provided full_state shows the player in the room."""
+    if not full_state or not player_id:
+        return False
+
+    room_data = full_state.get("data") or {}
+    players = room_data.get("players") or []
+
+    for slot in players:
+        if slot and slot.get("id") == player_id:
+            return True
+    return False
 
 
 def process_message(message):
@@ -2569,16 +2621,69 @@ async def try_room(room_id, player_id, headers):
 
                 print(f"\n  Looking for player ID: {player_id}")
 
-                for slot in players:
-                    if slot and slot.get("id") == player_id:
-                        print(f"  ✓ Found player in room {room_id}!")
-                        # Return the open websocket connection and the FULL Welcome message
-                        return websocket, data, room_id
+                if is_player_in_room_state(full_state, player_id):
+                    print(f"  ✓ Found player in room {room_id}!")
+                    # Return the open websocket connection and the FULL Welcome message
+                    return websocket, data, room_id
 
-                # Count actual players (non-None slots)
-                actual_player_count = sum(1 for slot in players if slot is not None)
                 print(
-                    f"  Player not in room {room_id} ({actual_player_count}/6 players)"
+                    "  Player not present in Welcome response; waiting briefly for updates..."
+                )
+                loop = asyncio.get_running_loop()
+                wait_deadline = loop.time() + 3.0
+
+                while True:
+                    remaining = wait_deadline - loop.time()
+                    if remaining <= 0:
+                        break
+
+                    try:
+                        followup = await asyncio.wait_for(
+                            websocket.recv(), timeout=remaining
+                        )
+                    except asyncio.TimeoutError:
+                        break
+
+                    if isinstance(followup, str) and followup.strip().lower() == "ping":
+                        await websocket.send("pong")
+                        continue
+
+                    try:
+                        follow_data = json.loads(followup)
+                    except json.JSONDecodeError:
+                        continue
+
+                    msg_type = follow_data.get("type")
+                    if msg_type == "PartialState":
+                        patches = follow_data.get("patches") or []
+                        for patch in patches:
+                            try:
+                                apply_json_patch(full_state, patch)
+                            except Exception as patch_err:
+                                print(
+                                    f"  Error applying patch while waiting for player: {patch_err}"
+                                )
+                        if is_player_in_room_state(full_state, player_id):
+                            print(
+                                f"  ✓ Found player in room {room_id} after server updates!"
+                            )
+                            return websocket, data, room_id
+                    elif msg_type == "Welcome":
+                        new_state = follow_data.get("fullState")
+                        if not new_state:
+                            continue
+                        data = follow_data
+                        full_state = new_state
+                        if is_player_in_room_state(full_state, player_id):
+                            print(
+                                f"  ✓ Found player in room {room_id} after updated Welcome!"
+                            )
+                            return websocket, data, room_id
+
+                latest_players = full_state.get("data", {}).get("players", []) or []
+                actual_player_count = sum(1 for slot in latest_players if slot is not None)
+                print(
+                    f"  Player not in room {room_id} after waiting ({actual_player_count}/6 players)"
                 )
                 # Close this connection before returning
                 await websocket.close()
