@@ -1741,6 +1741,83 @@ async def send_pet_positions(websocket):
     await move_pets_randomly(websocket)
 
 
+async def find_harvestable_plant(slot_data, species):
+    """Find a ready-to-harvest plant of the specified species
+    Returns (tile_slot, slots_index) if found, else (None, None)
+    """
+    import time
+
+    current_time = int(time.time() * 1000)
+
+    garden_data = slot_data.get("garden", {})
+    tile_objects = garden_data.get("tileObjects", {})
+
+    # Get min mutations required for harvest
+    min_mutations = 3
+    if harvest_config:
+        min_mutations = harvest_config.get("min_mutations", 3)
+
+    for tile_id, tile_obj in tile_objects.items():
+        if not tile_obj or tile_obj.get("objectType") != "plant":
+            continue
+
+        slots = tile_obj.get("slots", [])
+        for slot_index, plant_slot in enumerate(slots):
+            if not plant_slot:
+                continue
+
+            plant_species = plant_slot.get("species")
+            end_time = plant_slot.get("endTime", 0)
+            mutations = plant_slot.get("mutations", [])
+
+            # Check if this plant matches species and is ready to harvest
+            if (
+                plant_species == species
+                and current_time >= end_time
+                and len(mutations) >= min_mutations
+            ):
+                return int(tile_id), slot_index
+
+    return None, None
+
+
+async def harvest_and_replant(websocket, slot_data, species):
+    """Harvest a plant of the specified species and replant it
+    Returns True if successful, False otherwise
+    """
+    tile_slot, slots_index = await find_harvestable_plant(slot_data, species)
+
+    if tile_slot is None:
+        return False
+
+    print(f"🌾 Found harvestable {species} at slot {tile_slot}")
+
+    # Harvest the crop
+    harvest_message = {
+        "scopePath": ["Room", "Quinoa"],
+        "type": "HarvestCrop",
+        "slot": tile_slot,
+        "slotsIndex": slots_index,
+    }
+    await send_message(websocket, harvest_message)
+    print(f"✂️  Harvested {species} from slot {tile_slot}")
+
+    # Wait a moment for the harvest to process
+    await asyncio.sleep(0.3)
+
+    # Replant the same species
+    plant_message = {
+        "scopePath": ["Room", "Quinoa"],
+        "type": "PlantSeed",
+        "slot": tile_slot,
+        "species": species,
+    }
+    await send_message(websocket, plant_message)
+    print(f"🌱 Replanted {species} in slot {tile_slot}")
+
+    return True
+
+
 async def feed_hungry_pets(websocket):
     """Check for hungry pets and feed them with appropriate produce"""
     if not game_state["full_state"]:
@@ -1824,7 +1901,24 @@ async def feed_hungry_pets(websocket):
                 if not produce_by_species[required_food]:
                     del produce_by_species[required_food]
             else:
-                print(f"⚠️  {pet_species} is hungry but no {required_food} available!")
+                # No produce available - try to harvest and replant
+                print(
+                    f"⚠️  {pet_species} is hungry but no {required_food} available in inventory"
+                )
+                print(f"🔍 Searching for harvestable {required_food}...")
+
+                success = await harvest_and_replant(
+                    websocket, slot_data, required_food
+                )
+
+                if success:
+                    print(
+                        f"✅ Harvested and replanted {required_food} for {pet_species}"
+                    )
+                    # Wait for the harvest to be processed and added to inventory
+                    await asyncio.sleep(1.0)
+                else:
+                    print(f"❌ No harvestable {required_food} found in garden")
 
 
 async def check_and_buy_from_shop(websocket):
