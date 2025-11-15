@@ -1649,7 +1649,7 @@ async def initialize_pet_positions(websocket, wait_timeout=10.0):
 
 
 async def move_pets_randomly(websocket, wait_timeout=10.0):
-    """Randomly move pets within garden bounds"""
+    """Randomly move pets within garden bounds and send positions every update"""
     # Local coordinate bounds (0-indexed): 23 cols (0-22), 12 rows (0-11)
     MIN_X, MAX_X = 0, 22
     MIN_Y, MAX_Y = 0, 11
@@ -1662,7 +1662,6 @@ async def move_pets_randomly(websocket, wait_timeout=10.0):
         slot_data = slot.get("data", {})
         if not slot_data:
             return
-        
 
     # petSlotInfos is at the slot level, not in slot['data']
     # Get it from the slot directly
@@ -1672,14 +1671,18 @@ async def move_pets_randomly(websocket, wait_timeout=10.0):
 
     pet_slot_infos = slot.get("petSlotInfos", {})
 
-    # If petSlotInfos is not a dict or is empty, nothing to move yet
+    # If petSlotInfos is not a dict or is empty, nothing to send yet
     if not isinstance(pet_slot_infos, dict) or not pet_slot_infos:
         return
 
     pet_slots = slot_data.get("petSlots", [])
-    active_ids = set(slot.get("id") for slot in pet_slots if isinstance(slot, dict) and slot.get("id"))
+    active_ids = set(
+        slot.get("id")
+        for slot in pet_slots
+        if isinstance(slot, dict) and slot.get("id")
+    )
 
-    all_pet_positions = {}  # Collect all pet positions
+    all_pet_positions = {}  # Collect all pet positions (always send, even if not moved)
     for pet_id, pet_slot_info in pet_slot_infos.items():
 
         position = pet_slot_info.get("position")
@@ -1696,6 +1699,8 @@ async def move_pets_randomly(websocket, wait_timeout=10.0):
         # Convert to local coordinates for movement logic
         local_coords = convert_server_to_local_coords(server_pos["x"], server_pos["y"])
         if not local_coords:
+            # If we can't convert, just use the server position as-is
+            all_pet_positions[pet_id] = server_pos
             continue
 
         pos = {"x": local_coords["x"], "y": local_coords["y"]}
@@ -1721,12 +1726,14 @@ async def move_pets_randomly(websocket, wait_timeout=10.0):
         # Convert to server coordinates
         new_server_pos = convert_local_to_server_coords(new_pos["x"], new_pos["y"])
         if not new_server_pos:
+            # Fallback to original position if conversion fails
+            all_pet_positions[pet_id] = server_pos
             continue
 
-        # Add this pet's position to the collection
+        # Always add this pet's position (moved or not)
         all_pet_positions[pet_id] = new_server_pos
 
-    # Send a single PetPositions message with all pets
+    # Always send PetPositions message every update (even if positions didn't change)
     if all_pet_positions:
         pet_positions_message = {
             "scopePath": ["Room", "Quinoa"],
