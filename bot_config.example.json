@@ -33,8 +33,14 @@
     }
   },
   "pet_food_mapping": {
-    "Bee": "OrangeTulip",
-    "Chicken": "Aloe",
-    "Worm": "Aloe"
+    "Bee": [
+      "Daffodil"
+    ],
+    "Chicken": [
+      "Aloe"
+    ],
+    "Worm": [
+      "Aloe"
+    ]
   }
 }

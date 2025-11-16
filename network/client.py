@@ -22,6 +22,7 @@ from network.protocol import (
     log_message_to_file,
     is_player_in_room_state,
     apply_json_patch,
+    GardenFullError,
 )
 from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS, GAME_VERSION
 
@@ -204,6 +205,23 @@ class MagicGardenClient:
                     print(f"\n  Looking for player ID: {self.player_id}")
 
                     if is_player_in_room_state(full_state, self.player_id):
+                        # Check if garden (Quinoa game) is full before committing to this room
+                        quinoa_state = full_state.get("child", {}).get("data", {})
+                        if quinoa_state:
+                            user_slots = quinoa_state.get("userSlots", [])
+                            # Count occupied slots (non-empty)
+                            occupied_slot_count = sum(1 for slot in user_slots if slot)
+                            if occupied_slot_count == 6:
+                                # All 6 slots occupied, check if we have one
+                                our_slot_found = any(
+                                    slot and slot.get("playerId") == self.player_id
+                                    for slot in user_slots
+                                )
+                                if not our_slot_found:
+                                    print(f"  ✗ Garden full: All 6 slots occupied by other players")
+                                    await websocket.close()
+                                    return None, None, None
+
                         print(f"  ✓ Found player in room {room_id}!")
                         # Return the open websocket connection and the FULL Welcome message
                         return websocket, data, room_id
@@ -261,6 +279,22 @@ class MagicGardenClient:
                                     f"  ✓ Found player in room {room_id} after updated Welcome!"
                                 )
                                 return websocket, data, room_id
+
+                    # Check if garden is full before giving up
+                    quinoa_state = full_state.get("child", {}).get("data", {})
+                    if quinoa_state:
+                        user_slots = quinoa_state.get("userSlots", [])
+                        # Count occupied slots (non-empty)
+                        occupied_slot_count = sum(1 for slot in user_slots if slot)
+                        if occupied_slot_count == 6:
+                            our_slot_found = any(
+                                slot and slot.get("playerId") == self.player_id
+                                for slot in user_slots
+                            )
+                            if not our_slot_found:
+                                print(f"  ✗ Garden full: All 6 slots occupied by other players")
+                                await websocket.close()
+                                return None, None, None
 
                     latest_players = full_state.get("data", {}).get("players", []) or []
                     actual_player_count = sum(

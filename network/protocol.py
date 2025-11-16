@@ -14,6 +14,13 @@ from game_state import GameState
 from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS
 
 
+# ========== Custom Exceptions ==========
+
+class GardenFullError(Exception):
+    """Raised when the garden has all 6 slots occupied by other players."""
+    pass
+
+
 # ========== JSON Patch Implementation (RFC 6901) ==========
 
 def parse_json_pointer(pointer):
@@ -212,6 +219,7 @@ def process_welcome_message(data: Dict[str, Any], game_state: GameState) -> Opti
     # List all players in the room and find our slot
     print("\nPlayers in room:")
     occupied_slots = []
+    our_slot_found = False
     for slot_idx, slot in enumerate(user_slots):
         if slot:
             player_id = slot.get("playerId")
@@ -230,6 +238,14 @@ def process_welcome_message(data: Dict[str, Any], game_state: GameState) -> Opti
             # Store our player's name and slot index (already done by refresh_player_metadata)
             if player_id == our_player_id:
                 print(f"  → We are in slot {slot_idx}")
+                our_slot_found = True
+
+    # Check if garden is full (all 6 slots occupied by other players)
+    if len(occupied_slots) == 6 and not our_slot_found:
+        print("\n" + "!" * 60)
+        print("GARDEN FULL: All 6 slots occupied by other players")
+        print("!" * 60)
+        raise GardenFullError("Garden has all 6 slots occupied by other players")
 
     # Get spawn position for our detected slot
     user_slot_index = game_state.get_user_slot_index()

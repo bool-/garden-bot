@@ -35,7 +35,7 @@ class HarvestConfig:
 @dataclass
 class PetFoodConfig:
     """Pet food mapping configuration"""
-    mapping: Dict[str, str]  # {pet_species: food_species}
+    mapping: Dict[str, List[str]]  # {pet_species: [food_species_priority_list]}
 
 
 @dataclass
@@ -149,10 +149,31 @@ def load_config() -> BotConfig:
     # Pet food mapping
     pet_food_mapping = config.get("pet_food_mapping")
     if isinstance(pet_food_mapping, dict):
-        pet_food_config = pet_food_mapping
+        # Normalize pet food config to use lists
+        # Convert old format {"Bee": "OrangeTulip"} to new format {"Bee": ["OrangeTulip"]}
+        pet_food_config = {}
+        for pet_species, food_value in pet_food_mapping.items():
+            if isinstance(food_value, list):
+                # Already in new format
+                pet_food_config[pet_species] = food_value
+            elif isinstance(food_value, str):
+                # Convert old format (single string) to new format (list)
+                pet_food_config[pet_species] = [food_value]
+            else:
+                # Invalid format, skip this entry
+                continue
+
+        # Update config if normalization changed anything
+        if pet_food_config != pet_food_mapping:
+            config["pet_food_mapping"] = pet_food_config
+            config_dirty = True
     else:
-        # Default pet food mapping
-        pet_food_config = {"Bee": "OrangeTulip", "Chicken": "Aloe", "Worm": "Aloe"}
+        # Default pet food mapping (using new list format)
+        pet_food_config = {
+            "Bee": ["OrangeTulip"],
+            "Chicken": ["Aloe"],
+            "Worm": ["Aloe"]
+        }
         config["pet_food_mapping"] = pet_food_config
         config_dirty = True
 
