@@ -48,6 +48,23 @@ class MagicGardenClient:
         self.cookies = config.cookies
         self.spawn_pos = None
 
+        # Connection lifecycle management
+        self._connected = asyncio.Event()
+        self._disconnect_requested = asyncio.Event()
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if the client is currently connected to the server."""
+        return self.websocket is not None and self._connected.is_set()
+
+    def _signal_disconnect(self):
+        """Signal that the connection has been lost."""
+        self._connected.clear()
+        self._disconnect_requested.set()
+        print("\n" + "!" * 60)
+        print("CONNECTION LOST - Shutting down automation tasks...")
+        print("!" * 60 + "\n")
+
     async def authenticate(self, room_id: str) -> Tuple[Optional[Dict], Optional[str]]:
         """
         Authenticate with server for a specific room.
@@ -286,9 +303,15 @@ class MagicGardenClient:
 
         Args:
             message: Message dict to send
+
+        Raises:
+            RuntimeError: If not connected to server
         """
-        if not self.websocket:
-            raise RuntimeError("Not connected to server")
+        if not self.is_connected:
+            raise RuntimeError(
+                "Not connected to server - connection has been lost. "
+                "Automation tasks should exit gracefully."
+            )
 
         await self.websocket.send(json.dumps(message))
         self.game_state.increment_stat("messages_sent")
@@ -326,14 +349,26 @@ class MagicGardenClient:
                 process_message(message, self.game_state)
         except websockets.exceptions.ConnectionClosed:
             pass
+        finally:
+            # Signal disconnect when receive loop exits for any reason
+            self._signal_disconnect()
 
     async def _ping_task(self):
-        """Send pings periodically."""
-        while True:
+        """
+        Send pings periodically.
+        Exits gracefully when connection is lost.
+        """
+        while self.is_connected:
             await asyncio.sleep(2)
+            if not self.is_connected:
+                break
             try:
                 await self.send_ping()
-            except:
+            except RuntimeError:
+                # Connection lost, exit gracefully
+                break
+            except Exception as e:
+                print(f"Error in ping task: {e}")
                 break
 
     async def connect(self):
@@ -441,6 +476,9 @@ class MagicGardenClient:
         # Store websocket and room ID
         self.websocket = websocket
         self.game_state["room_id"] = connected_room
+
+        # Signal successful connection
+        self._connected.set()
 
         # Process the welcome message and store spawn position
         self.spawn_pos = process_welcome_message(welcome_data, self.game_state)

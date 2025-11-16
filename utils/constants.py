@@ -9,7 +9,7 @@ MESSAGE_LOG_FILE = "messages.log"
 CONFIG_FILE = "bot_config.json"
 
 # Game version (used in API URLs and WebSocket connection)
-GAME_VERSION = "cb622cd"
+GAME_VERSION = "405ae14"
 
 # Spawn positions - server coordinates for spawning (determines which garden you get)
 # Ordered left-to-right, top-to-bottom (slot 0-5)

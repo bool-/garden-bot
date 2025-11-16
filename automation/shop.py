@@ -266,9 +266,25 @@ async def run_shop_buyer(client, game_state: GameState, config: ShopConfig):
     # Get check interval from config
     interval = config.check_interval_seconds if config else 10
 
-    while True:
+    while client.is_connected:
         await asyncio.sleep(interval)
+
+        # Exit if disconnected
+        if not client.is_connected:
+            print("Shop buyer task exiting - connection lost")
+            break
+
         try:
             await check_and_buy_from_shop(client, game_state, config)
+        except RuntimeError as e:
+            # Connection lost during send
+            if "Not connected" in str(e):
+                print("Shop buyer task exiting - connection lost")
+                break
+            raise
         except Exception as e:
             print(f"Error in shop buying task: {e}")
+            # Continue on non-connection errors if still connected
+            if not client.is_connected:
+                print("Shop buyer task exiting - connection lost")
+                break
