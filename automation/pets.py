@@ -381,7 +381,7 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
     pet_food_map = (
         config.mapping
         if config and config.mapping
-        else {"Bee": "OrangeTulip", "Chicken": "Aloe", "Worm": "Aloe"}
+        else {"Bee": ["OrangeTulip"], "Chicken": ["Aloe"], "Worm": ["Aloe"]}
     )
 
     # Check each active pet slot
@@ -395,50 +395,115 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
 
         # Check if pet is hungry (hunger == 0)
         if hunger == 0 and pet_species in pet_food_map:
-            required_food = pet_food_map[pet_species]
+            food_list = pet_food_map[pet_species]
 
-            # Check if we have the required produce
-            if (
-                required_food in produce_by_species
-                and produce_by_species[required_food]
-            ):
-                crop_item_id = produce_by_species[required_food][0]
+            # Ensure food_list is actually a list
+            if not isinstance(food_list, list):
+                food_list = [food_list]
 
-                # Send FeedPet action
-                feed_message = {
-                    "type": "FeedPet",
-                    "petItemId": pet_id,
-                    "cropItemId": crop_item_id,
-                    "scopePath": ["Room", "Quinoa"],
-                }
-                await client.send(feed_message)
-                print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with {required_food}")
+            fed = False
 
-                # Remove the used produce from our lookup to avoid double-feeding
-                produce_by_species[required_food].pop(0)
-                if not produce_by_species[required_food]:
-                    del produce_by_species[required_food]
-            else:
-                # No produce available - try to harvest and replant
-                # Use mode="lowest" to prioritize plants with lowest mutation count for pet feeding
-                # Use min_mutations=0 to accept any mature plant regardless of mutation count
-                print(
-                    f"{pet_species} is hungry but no {required_food} available in inventory"
-                )
-                print(
-                    f"Searching for harvestable {required_food} (prioritizing lowest mutations for pet feeding)..."
-                )
+            # Try each food in priority order
+            for required_food in food_list:
+                # Check if we have the required produce in inventory
+                if (
+                    required_food in produce_by_species
+                    and produce_by_species[required_food]
+                ):
+                    crop_item_id = produce_by_species[required_food][0]
 
-                success = await find_and_harvest(
-                    client, slot_data, required_food, mode="lowest", min_mutations=0
-                )
+                    # Send FeedPet action
+                    feed_message = {
+                        "type": "FeedPet",
+                        "petItemId": pet_id,
+                        "cropItemId": crop_item_id,
+                        "scopePath": ["Room", "Quinoa"],
+                    }
+                    await client.send(feed_message)
+                    print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with {required_food}")
 
-                if success:
-                    print(f"Harvested and replanted {required_food} for {pet_species}")
-                    # Wait for the harvest to be processed and added to inventory
-                    await asyncio.sleep(1.0)
+                    # Remove the used produce from our lookup to avoid double-feeding
+                    produce_by_species[required_food].pop(0)
+                    if not produce_by_species[required_food]:
+                        del produce_by_species[required_food]
+
+                    fed = True
+                    break
                 else:
-                    print(f"No harvestable {required_food} found in garden")
+                    # No produce available in inventory - try to harvest and replant
+                    # Use mode="lowest" to prioritize plants with lowest mutation count for pet feeding
+                    # Use min_mutations=0 to accept any mature plant regardless of mutation count
+                    print(
+                        f"{pet_species} is hungry but no {required_food} available in inventory"
+                    )
+                    print(
+                        f"Searching for harvestable {required_food} (prioritizing lowest mutations for pet feeding)..."
+                    )
+
+                    success = await find_and_harvest(
+                        client, slot_data, required_food, mode="lowest", min_mutations=0
+                    )
+
+                    if success:
+                        print(f"Harvested and replanted {required_food} for {pet_species}")
+                        # Wait for the harvest to be processed and added to inventory
+                        await asyncio.sleep(1.0)
+
+                        # Refresh inventory to include newly harvested produce
+                        our_slot = game_state.get_player_slot()
+                        if not our_slot:
+                            print("Could not refresh inventory - player slot unavailable")
+                            break
+
+                        fresh_slot_data = our_slot.get("data", {})
+                        fresh_inv_data = fresh_slot_data.get("inventory", {})
+                        fresh_items_list = fresh_inv_data.get("items", [])
+
+                        # Rebuild produce lookup with fresh inventory
+                        fresh_produce_by_species = {}
+                        for item in fresh_items_list:
+                            if item.get("itemType") == "Produce":
+                                species = item.get("species")
+                                item_id = item.get("id")
+                                if species and item_id:
+                                    if species not in fresh_produce_by_species:
+                                        fresh_produce_by_species[species] = []
+                                    fresh_produce_by_species[species].append(item_id)
+
+                        # Now try to feed the pet with the newly harvested produce
+                        if (
+                            required_food in fresh_produce_by_species
+                            and fresh_produce_by_species[required_food]
+                        ):
+                            crop_item_id = fresh_produce_by_species[required_food][0]
+
+                            # Send FeedPet action
+                            feed_message = {
+                                "type": "FeedPet",
+                                "petItemId": pet_id,
+                                "cropItemId": crop_item_id,
+                                "scopePath": ["Room", "Quinoa"],
+                            }
+                            await client.send(feed_message)
+                            print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with freshly harvested {required_food}")
+
+                            # Update the main produce_by_species to reflect this usage
+                            if required_food in produce_by_species:
+                                produce_by_species[required_food] = fresh_produce_by_species[required_food][1:]
+                                if not produce_by_species[required_food]:
+                                    del produce_by_species[required_food]
+
+                            fed = True
+                            break
+                        else:
+                            print(f"Harvested {required_food} but it's not in inventory yet - continuing to next food option")
+                            # Continue to next food in priority list
+                    else:
+                        print(f"No harvestable {required_food} found in garden")
+                        # Continue to next food in priority list
+
+            if not fed:
+                print(f"Could not feed {pet_species} - no available food from priority list: {food_list}")
 
 
 # ========== Pet Tasks ==========
@@ -471,7 +536,11 @@ async def run_pet_feeder(client, game_state: GameState, config: PetFoodConfig):
             if "Not connected" in str(e):
                 print("Pet feeder task exiting - connection lost")
                 break
-            raise
+            # Log other RuntimeErrors but don't re-raise to avoid crashing the entire task group
+            print(f"RuntimeError in pet feeding task: {e}")
+            if not client.is_connected:
+                print("Pet feeder task exiting - connection lost")
+                break
         except Exception as e:
             print(f"Error in pet feeding task: {e}")
             # Continue on non-connection errors if still connected
@@ -506,7 +575,11 @@ async def run_pet_mover(client, game_state: GameState):
             if "Not connected" in str(e):
                 print("Pet mover task exiting - connection lost")
                 break
-            raise
+            # Log other RuntimeErrors but don't re-raise to avoid crashing the entire task group
+            print(f"RuntimeError in pet movement task: {e}")
+            if not client.is_connected:
+                print("Pet mover task exiting - connection lost")
+                break
         except Exception as e:
             print(f"Error in pet movement task: {e}")
             # Continue on non-connection errors if still connected
