@@ -29,7 +29,11 @@ class ShopConfig:
 @dataclass
 class HarvestConfig:
     """Harvest configuration"""
+    enabled: bool
+    species_to_harvest: list
+    species_to_replant: list  # Species that should be replanted after harvest (e.g., Carrot, Tomato)
     min_mutations: int
+    check_interval_seconds: int
 
 
 @dataclass
@@ -143,9 +147,38 @@ def load_config() -> BotConfig:
     if isinstance(ready_config, dict):
         harvest_config = ready_config
     else:
-        harvest_config = {"min_mutations": 3}
+        harvest_config = {
+            "enabled": False,
+            "species": [],
+            "min_mutations": 3,
+            "check_interval_seconds": 30
+        }
         config["ready_to_harvest"] = harvest_config
         config_dirty = True
+
+    # Ensure all harvest config keys exist with defaults
+    if "enabled" not in harvest_config:
+        harvest_config["enabled"] = False
+        config_dirty = True
+    if "species" not in harvest_config:
+        harvest_config["species"] = []
+        config_dirty = True
+    if "species_to_replant" not in harvest_config:
+        harvest_config["species_to_replant"] = []
+        config_dirty = True
+    if "min_mutations" not in harvest_config:
+        harvest_config["min_mutations"] = 3
+        config_dirty = True
+    if "check_interval_seconds" not in harvest_config:
+        harvest_config["check_interval_seconds"] = 30
+        config_dirty = True
+
+    print(f"Loaded harvest config: Auto-harvest enabled = {harvest_config.get('enabled', False)}")
+    if harvest_config.get('enabled'):
+        print(f"  Species to harvest: {harvest_config.get('species', [])}")
+        print(f"  Species to replant: {harvest_config.get('species_to_replant', [])}")
+        print(f"  Min mutations: {harvest_config.get('min_mutations', 3)}")
+        print(f"  Check interval: {harvest_config.get('check_interval_seconds', 30)}s")
 
     # Shop config
     normalized_shop = normalize_shop_config(config.get("shop"))
@@ -261,7 +294,11 @@ def load_config() -> BotConfig:
     )
 
     harvest_config_obj = HarvestConfig(
-        min_mutations=harvest_config.get("min_mutations", 3)
+        enabled=harvest_config.get("enabled", False),
+        species_to_harvest=harvest_config.get("species", []),
+        species_to_replant=harvest_config.get("species_to_replant", []),
+        min_mutations=harvest_config.get("min_mutations", 3),
+        check_interval_seconds=harvest_config.get("check_interval_seconds", 30)
     )
 
     pet_food_config_obj = PetFoodConfig(

@@ -60,10 +60,15 @@ The bot uses a modular architecture:
 ✅ **Emulates browser behavior** - Proper pings, pongs, position updates
 
 ### Automation Features
-✅ **Auto-harvest** - Automatically harvest mature crops and replant
-  - Configurable minimum mutations
-  - Harvesting modes: lowest, highest, or first
-  - Species-specific targeting
+✅ **Auto-harvest** - Automatically harvest mature crops, replant, and sell
+  - Enable/disable via config
+  - Configurable species list to auto-harvest
+  - Separate list for species that need replanting (perennials like Bamboo/Sunflower vs annuals like Carrot/Tomato)
+  - Configurable minimum mutations (e.g., only harvest crops with 3+ mutations)
+  - Prioritizes highest mutation count when selling
+  - Harvests ALL ready plants of each species (not just one)
+  - Automatically sells all harvested crops after each cycle
+  - Configurable check interval
 ✅ **Pet automation** - Feed hungry pets and move them around garden
   - Configurable food limits per species
   - Random movement within garden bounds
@@ -86,28 +91,39 @@ Edit `bot_config.json` to customize behavior:
 
 ```json
 {
-  "player_id": "your-persistent-id",
-  "harvest": {
+  "playerId": "your-persistent-id",
+  "cookies": "your-magicgarden.gg-cookies",
+  "ready_to_harvest": {
     "enabled": true,
-    "species": "Carrot",
-    "min_mutations": 3,
-    "mode": "lowest"
+    "species": ["Sunflower", "Bamboo", "Carrot", "Tomato"],  // All species to auto-harvest
+    "species_to_replant": ["Carrot", "Tomato"],  // Only replant annuals (perennials like Sunflower/Bamboo keep growing)
+    "min_mutations": 3,  // Only harvest crops with 3+ mutations
+    "check_interval_seconds": 30  // Check for harvestable crops every 30 seconds
   },
-  "pet_food": {
-    "enabled": true,
-    "limits": {
-      "Cat": 5,
-      "Dog": 3
-    }
+  "pet_food_mapping": {
+    "Bee": ["Lily", "Daffodil"],
+    "Chicken": ["Aloe"],
+    "Worm": ["Aloe"]
   },
   "shop": {
     "enabled": true,
-    "seeds": {
-      "Carrot": 10
-    },
-    "eggs": {
-      "Cat": 2
+    "check_interval_seconds": 60,
+    "min_coins_to_keep": 1000,
+    "items_to_buy": {
+      "seeds": {
+        "enabled": true,
+        "items": ["Carrot", "Tomato"]
+      },
+      "eggs": {
+        "enabled": true,
+        "items": ["CommonEgg", "UncommonEgg"]
+      }
     }
+  },
+  "reconnection": {
+    "max_retries": 5,
+    "base_delay": 5,
+    "max_delay": 60
   }
 }
 ```

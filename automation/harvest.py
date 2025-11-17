@@ -111,6 +111,7 @@ async def find_and_harvest(
     species: str,
     mode: str = "highest",
     min_mutations: Optional[int] = None,
+    should_replant: bool = True,
 ) -> bool:
     """
     Find and harvest a plant of the specified species based on mutation priority.
@@ -123,6 +124,7 @@ async def find_and_harvest(
               "highest" to prioritize highest mutation count (for auto-harvesting/selling)
         min_mutations: Minimum mutation count required to harvest (default: 3)
                       Set to 0 for pet feeding to harvest any mature plant
+        should_replant: Whether to replant after harvesting (False for perennial plants)
 
     Returns:
         True if successful, False otherwise
@@ -203,15 +205,16 @@ async def find_and_harvest(
     # Wait a moment for the harvest to process
     await asyncio.sleep(0.3)
 
-    # Replant the same species
-    plant_message = {
-        "scopePath": ["Room", "Quinoa"],
-        "type": "PlantSeed",
-        "slot": tile_slot,
-        "species": species,
-    }
-    await client.send(plant_message)
-    print(f"Replanted {species} in slot {tile_slot}")
+    # Only replant if specified (perennial plants like Bamboo/Sunflower don't need replanting)
+    if should_replant:
+        plant_message = {
+            "scopePath": ["Room", "Quinoa"],
+            "type": "PlantSeed",
+            "slot": tile_slot,
+            "species": species,
+        }
+        await client.send(plant_message)
+        print(f"Replanted {species} in slot {tile_slot}")
 
     return True
 
@@ -233,17 +236,76 @@ async def run_auto_harvest(client, game_state: GameState, config: HarvestConfig)
         await asyncio.sleep(15)
 
         while True:
+            # Check if auto-harvest is enabled
+            if not config.enabled:
+                await asyncio.sleep(config.check_interval_seconds)
+                continue
+
             # Get player slot data
             player_slot = game_state.get_player_slot()
             if not player_slot:
-                await asyncio.sleep(10)
+                await asyncio.sleep(config.check_interval_seconds)
                 continue
 
-            # NOTE: Placeholder for future auto-harvest logic.
-            # Pet feeding invokes find_and_harvest directly, so this task
-            # intentionally idles until we implement crop selection rules.
+            slot_data = player_slot.get("data", {})
+            if not slot_data:
+                await asyncio.sleep(config.check_interval_seconds)
+                continue
 
-            await asyncio.sleep(30)  # Check every 30 seconds
+            # Track if we harvested anything this cycle
+            harvested_any = False
+
+            # Try to harvest each configured species
+            for species in config.species_to_harvest:
+                # Determine if this species should be replanted
+                should_replant = species in config.species_to_replant
+
+                # Keep harvesting this species until no more are ready
+                while True:
+                    try:
+                        # Use mode="highest" to prioritize highest mutation count for selling
+                        success = await find_and_harvest(
+                            client,
+                            slot_data,
+                            species,
+                            mode="highest",
+                            min_mutations=config.min_mutations,
+                            should_replant=should_replant
+                        )
+
+                        if success:
+                            harvested_any = True
+                            # Wait a bit between harvests to appear more human-like
+                            await asyncio.sleep(1.0)
+
+                            # Refresh slot data after harvest to find more plants
+                            player_slot = game_state.get_player_slot()
+                            if player_slot:
+                                slot_data = player_slot.get("data", {})
+                            else:
+                                break  # Can't continue without slot data
+                        else:
+                            # No more plants of this species ready to harvest
+                            break
+
+                    except Exception as e:
+                        print(f"Error harvesting {species}: {e}")
+                        break  # Move to next species on error
+
+            # If we harvested anything, sell all crops
+            if harvested_any:
+                try:
+                    sell_message = {
+                        "scopePath": ["Room", "Quinoa"],
+                        "type": "SellAllCrops"
+                    }
+                    await client.send(sell_message)
+                    print("Sold all harvested crops")
+                except Exception as e:
+                    print(f"Error selling crops: {e}")
+
+            # Wait before next check
+            await asyncio.sleep(config.check_interval_seconds)
 
     except asyncio.CancelledError:
         # Task cancelled due to disconnection
