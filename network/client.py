@@ -44,7 +44,7 @@ class MagicGardenClient:
         self.game_state = game_state
         self.config = config
         self.websocket = None
-        self.tasks: List[Callable] = []
+        self.task_factories: List[Callable] = []  # Functions that create tasks
         self.player_id = config.player_id
         self.cookies = config.cookies
         self.spawn_pos = None
@@ -52,6 +52,7 @@ class MagicGardenClient:
         # Connection lifecycle management
         self._connected = asyncio.Event()
         self._disconnect_requested = asyncio.Event()
+        self._connection_id = 0  # Incremented on each new connection
 
     @property
     def is_connected(self) -> bool:
@@ -63,7 +64,7 @@ class MagicGardenClient:
         self._connected.clear()
         self._disconnect_requested.set()
         print("\n" + "!" * 60)
-        print("CONNECTION LOST - Shutting down automation tasks...")
+        print("CONNECTION LOST - Automation tasks will pause...")
         print("!" * 60 + "\n")
 
     async def authenticate(self, room_id: str) -> Tuple[Optional[Dict], Optional[str]]:
@@ -358,14 +359,14 @@ class MagicGardenClient:
         await self.send(ping_message)
         self.game_state.increment_stat("pings_sent")
 
-    def register_task(self, coro):
+    def register_task(self, task_factory):
         """
-        Register an automation task to run alongside the client.
+        Register an automation task factory to create tasks on each connection.
 
         Args:
-            coro: Coroutine/async function to run
+            task_factory: A function that returns a coroutine when called
         """
-        self.tasks.append(coro)
+        self.task_factories.append(task_factory)
 
     async def _receive_messages(self):
         """
@@ -511,6 +512,9 @@ class MagicGardenClient:
         self.websocket = websocket
         self.game_state["room_id"] = connected_room
 
+        # Increment connection ID for this new connection
+        self._connection_id += 1
+
         # Signal successful connection
         self._connected.set()
 
@@ -559,29 +563,122 @@ class MagicGardenClient:
         # Initialize pet positions
         await initialize_pets(self, self.game_state)
 
+    async def _run_session(self):
+        """
+        Run a single connection session.
+        Returns True if the session completed due to connection loss (eligible for retry).
+        Returns False if there was a critical error.
+        """
+        # Create asyncio tasks (not just coroutines)
+        tasks = []
+
+        try:
+            # Create and start all tasks
+            tasks.append(asyncio.create_task(self._receive_messages()))
+            tasks.append(asyncio.create_task(self._startup_task()))
+            tasks.append(asyncio.create_task(self._ping_task()))
+
+            # Create fresh instances of registered automation tasks
+            for factory in self.task_factories:
+                tasks.append(asyncio.create_task(factory()))
+
+            # Wait for the receive task to complete (it exits when connection closes)
+            # The receive task is always the first one
+            await tasks[0]
+
+            # Connection lost - cancel all other tasks
+            for task in tasks[1:]:
+                if not task.done():
+                    task.cancel()
+
+            # Wait for all tasks to finish cancellation
+            await asyncio.gather(*tasks[1:], return_exceptions=True)
+
+            return True
+
+        except Exception as e:
+            # Cancel all tasks on error
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+            print(f"Error in session: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return False
+
     async def run(self):
         """
         Run the client (main entry point).
         Connects to the server and runs all registered automation tasks.
+        Automatically attempts reconnection on connection loss.
         """
-        # Connect to server
-        if not await self.connect():
-            return
-
         try:
-            # Create task list
-            tasks_to_run = [
-                self._receive_messages(),
-                self._startup_task(),
-                self._ping_task(),
-            ]
+            retry_count = 0
+            max_retries = self.config.reconnection.max_retries
+            base_delay = self.config.reconnection.base_delay
+            max_delay = self.config.reconnection.max_delay
 
-            # Add registered automation tasks
-            tasks_to_run.extend(self.tasks)
-
-            # Run all tasks concurrently
-            await asyncio.gather(*tasks_to_run)
-
+            await self._run_with_reconnection(retry_count, max_retries, base_delay, max_delay)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"\n[FATAL ERROR] Unhandled exception in run(): {e}")
             print(f"Traceback: {traceback.format_exc()}")
+            raise
+
+    async def _run_with_reconnection(self, retry_count, max_retries, base_delay, max_delay):
+        """Internal reconnection loop."""
+        while True:
+            # Connect to server
+            if not await self.connect():
+                if retry_count >= max_retries:
+                    print("\n" + "!" * 60)
+                    print("FAILED TO CONNECT - Max retries reached")
+                    print("!" * 60)
+                    return
+
+                # Failed initial connection, wait and retry
+                retry_count += 1
+                delay = min(base_delay * (2 ** (retry_count - 1)), max_delay)
+                print(f"\nRetrying connection in {delay} seconds... (attempt {retry_count}/{max_retries})")
+                await asyncio.sleep(delay)
+                continue
+
+            # Reset retry count on successful connection
+            if retry_count > 0:
+                print(f"\n{'='*60}")
+                print(f"RECONNECTION SUCCESSFUL!")
+                print(f"{'='*60}\n")
+            retry_count = 0
+
+            # Run the session
+            session_ok = await self._run_session()
+
+            # Check if we should attempt reconnection
+            if not self.is_connected:
+                # Connection was lost
+                if retry_count >= max_retries:
+                    print("\n" + "!" * 60)
+                    print("MAX RECONNECTION ATTEMPTS REACHED - Shutting down permanently")
+                    print("!" * 60)
+                    return
+
+                # Calculate backoff delay
+                retry_count += 1
+                delay = min(base_delay * (2 ** (retry_count - 1)), max_delay)
+
+                print("\n" + "=" * 60)
+                print(f"ATTEMPTING RECONNECTION...")
+                print(f"Retry {retry_count}/{max_retries} - Waiting {delay} seconds")
+                print("=" * 60 + "\n")
+
+                await asyncio.sleep(delay)
+
+                # Reset connection state for next attempt
+                self._disconnect_requested.clear()
+                self.websocket = None
+
+                # Continue to next iteration to reconnect
+                continue
+            else:
+                # Session ended normally (shouldn't happen in normal operation)
+                break

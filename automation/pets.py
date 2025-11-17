@@ -518,35 +518,22 @@ async def run_pet_feeder(client, game_state: GameState, config: PetFoodConfig):
         game_state: Global game state
         config: Pet food configuration
     """
-    # Wait a bit before starting to allow game state to load
-    await asyncio.sleep(10)
+    try:
+        # Wait a bit before starting to allow game state to load
+        await asyncio.sleep(10)
 
-    while client.is_connected:
-        await asyncio.sleep(5)  # Check every 5 seconds
+        while True:
+            await asyncio.sleep(5)  # Check every 5 seconds
 
-        # Exit if disconnected
-        if not client.is_connected:
-            print("Pet feeder task exiting - connection lost")
-            break
+            try:
+                await feed_hungry_pets(client, game_state, config)
+            except Exception as e:
+                print(f"Error in pet feeding task: {e}")
+                # Continue on errors
 
-        try:
-            await feed_hungry_pets(client, game_state, config)
-        except RuntimeError as e:
-            # Connection lost during send
-            if "Not connected" in str(e):
-                print("Pet feeder task exiting - connection lost")
-                break
-            # Log other RuntimeErrors but don't re-raise to avoid crashing the entire task group
-            print(f"RuntimeError in pet feeding task: {e}")
-            if not client.is_connected:
-                print("Pet feeder task exiting - connection lost")
-                break
-        except Exception as e:
-            print(f"Error in pet feeding task: {e}")
-            # Continue on non-connection errors if still connected
-            if not client.is_connected:
-                print("Pet feeder task exiting - connection lost")
-                break
+    except asyncio.CancelledError:
+        # Task cancelled due to disconnection
+        pass
 
 
 async def run_pet_mover(client, game_state: GameState):
@@ -557,32 +544,19 @@ async def run_pet_mover(client, game_state: GameState):
         client: MagicGardenClient instance
         game_state: Global game state
     """
-    # Wait for startup task to complete pet initialization
-    await asyncio.sleep(8)
+    try:
+        # Wait for startup task to complete pet initialization
+        await asyncio.sleep(8)
 
-    while client.is_connected:
-        await asyncio.sleep(1)  # Send pet positions every second
+        while True:
+            await asyncio.sleep(1)  # Send pet positions every second
 
-        # Exit if disconnected
-        if not client.is_connected:
-            print("Pet mover task exiting - connection lost")
-            break
+            try:
+                await move_pets_randomly(client, game_state)
+            except Exception as e:
+                print(f"Error in pet movement task: {e}")
+                # Continue on errors
 
-        try:
-            await move_pets_randomly(client, game_state)
-        except RuntimeError as e:
-            # Connection lost during send
-            if "Not connected" in str(e):
-                print("Pet mover task exiting - connection lost")
-                break
-            # Log other RuntimeErrors but don't re-raise to avoid crashing the entire task group
-            print(f"RuntimeError in pet movement task: {e}")
-            if not client.is_connected:
-                print("Pet mover task exiting - connection lost")
-                break
-        except Exception as e:
-            print(f"Error in pet movement task: {e}")
-            # Continue on non-connection errors if still connected
-            if not client.is_connected:
-                print("Pet mover task exiting - connection lost")
-                break
+    except asyncio.CancelledError:
+        # Task cancelled due to disconnection
+        pass

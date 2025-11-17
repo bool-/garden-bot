@@ -43,13 +43,19 @@ async def run_bot(config, game_state, headless=False):
     # Create client
     client = MagicGardenClient(game_state, config)
 
-    # Register automation tasks
+    # Register automation task factories (lambdas that create new task instances)
     client.register_task(
-        harvest.run_auto_harvest(client, game_state, config.harvest)
+        lambda: harvest.run_auto_harvest(client, game_state, config.harvest)
     )
-    client.register_task(pets.run_pet_feeder(client, game_state, config.pet_food))
-    client.register_task(pets.run_pet_mover(client, game_state))
-    client.register_task(shop.run_shop_buyer(client, game_state, config.shop))
+    client.register_task(
+        lambda: pets.run_pet_feeder(client, game_state, config.pet_food)
+    )
+    client.register_task(
+        lambda: pets.run_pet_mover(client, game_state)
+    )
+    client.register_task(
+        lambda: shop.run_shop_buyer(client, game_state, config.shop)
+    )
 
     # Run client
     await client.run()

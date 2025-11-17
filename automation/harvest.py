@@ -228,11 +228,11 @@ async def run_auto_harvest(client, game_state: GameState, config: HarvestConfig)
         game_state: Global game state
         config: Harvest configuration
     """
-    # Wait a bit before starting to allow game state to load
-    await asyncio.sleep(15)
+    try:
+        # Wait a bit before starting to allow game state to load
+        await asyncio.sleep(15)
 
-    while True:
-        try:
+        while True:
             # Get player slot data
             player_slot = game_state.get_player_slot()
             if not player_slot:
@@ -245,6 +245,9 @@ async def run_auto_harvest(client, game_state: GameState, config: HarvestConfig)
 
             await asyncio.sleep(30)  # Check every 30 seconds
 
-        except Exception as e:
-            print(f"Error in auto-harvest task: {e}")
-            await asyncio.sleep(10)
+    except asyncio.CancelledError:
+        # Task cancelled due to disconnection
+        pass
+    except Exception as e:
+        print(f"Error in auto-harvest task: {e}")
+        raise

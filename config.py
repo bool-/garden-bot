@@ -39,6 +39,14 @@ class PetFoodConfig:
 
 
 @dataclass
+class ReconnectionConfig:
+    """Reconnection configuration"""
+    max_retries: int
+    base_delay: int
+    max_delay: int
+
+
+@dataclass
 class BotConfig:
     """Complete bot configuration"""
     player_id: str
@@ -47,6 +55,7 @@ class BotConfig:
     harvest: HarvestConfig
     shop: ShopConfig
     pet_food: PetFoodConfig
+    reconnection: ReconnectionConfig
 
 
 def get_default_shop_config():
@@ -179,6 +188,38 @@ def load_config() -> BotConfig:
 
     print(f"Loaded pet food mapping: {pet_food_config}")
 
+    # Reconnection config
+    reconnection_config = config.get("reconnection")
+    if isinstance(reconnection_config, dict):
+        # Validate and normalize values
+        max_retries = reconnection_config.get("max_retries", 5)
+        base_delay = reconnection_config.get("base_delay", 5)
+        max_delay = reconnection_config.get("max_delay", 60)
+
+        # Ensure values are within reasonable bounds
+        max_retries = max(0, min(max_retries, 100))  # 0-100 retries
+        base_delay = max(1, min(base_delay, 60))  # 1-60 seconds
+        max_delay = max(base_delay, min(max_delay, 300))  # base_delay to 5 minutes
+
+        reconnection_config_normalized = {
+            "max_retries": max_retries,
+            "base_delay": base_delay,
+            "max_delay": max_delay
+        }
+    else:
+        # Default reconnection config
+        reconnection_config_normalized = {
+            "max_retries": 5,
+            "base_delay": 5,
+            "max_delay": 60
+        }
+        config["reconnection"] = reconnection_config_normalized
+        config_dirty = True
+
+    print(f"Loaded reconnection config: max_retries={reconnection_config_normalized['max_retries']}, "
+          f"base_delay={reconnection_config_normalized['base_delay']}s, "
+          f"max_delay={reconnection_config_normalized['max_delay']}s")
+
     # Cookies
     cookies = config.get("cookies")
     missing_cookie_error = None
@@ -227,6 +268,12 @@ def load_config() -> BotConfig:
         mapping=pet_food_config
     )
 
+    reconnection_config_obj = ReconnectionConfig(
+        max_retries=reconnection_config_normalized["max_retries"],
+        base_delay=reconnection_config_normalized["base_delay"],
+        max_delay=reconnection_config_normalized["max_delay"]
+    )
+
     return BotConfig(
         player_id=player_id,
         cookies=cookies,
@@ -234,6 +281,7 @@ def load_config() -> BotConfig:
         harvest=harvest_config_obj,
         shop=shop_config_obj,
         pet_food=pet_food_config_obj,
+        reconnection=reconnection_config_obj,
     )
 
 
