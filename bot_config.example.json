@@ -1,7 +1,7 @@
 {
-  "playerId": "p_YOUR_PLAYER_ID_HERE",
+  "player_id": "p_YOUR_PLAYER_ID_HERE",
   "cookies": "YOUR_COOKIE_STRING_HERE",
-  "lastRoom": "MG1",
+  "room_id": "MG1",
   "ready_to_harvest": {
     "enabled": false,
     "species": [

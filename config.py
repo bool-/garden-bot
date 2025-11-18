@@ -138,11 +138,20 @@ def load_config() -> BotConfig:
     config_dirty = False
 
     # Player ID
-    player_id = config.get("playerId")
+    player_id = config.get("player_id")
     if not player_id:
-        player_id = generate_player_id()
-        config["playerId"] = player_id
-        config_dirty = True
+        # Try old key name for backwards compatibility
+        player_id = config.get("playerId")
+        if player_id:
+            # Migrate from old key to new key
+            config["player_id"] = player_id
+            config.pop("playerId", None)
+            config_dirty = True
+        else:
+            # Generate new player ID
+            player_id = generate_player_id()
+            config["player_id"] = player_id
+            config_dirty = True
 
     # Harvest config
     ready_config = config.get("ready_to_harvest")
@@ -305,7 +314,15 @@ def load_config() -> BotConfig:
         )
 
     # Last room
-    last_room = config.get("lastRoom")
+    last_room = config.get("room_id")
+    if not last_room:
+        # Try old key name for backwards compatibility
+        last_room = config.get("lastRoom")
+        if last_room:
+            # Migrate from old key to new key
+            config["room_id"] = last_room
+            config.pop("lastRoom", None)
+            config_dirty = True
 
     # Save if modified
     if config_dirty:
@@ -369,7 +386,9 @@ def save_last_room(room_id: str):
         else:
             config = {}
 
-        config["lastRoom"] = room_id
+        config["room_id"] = room_id
+        # Remove old key if present
+        config.pop("lastRoom", None)
 
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
