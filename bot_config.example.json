@@ -2,6 +2,7 @@
   "player_id": "p_YOUR_PLAYER_ID_HERE",
   "cookies": "YOUR_COOKIE_STRING_HERE",
   "room_id": "MG1",
+  "search_main_rooms": true,
   "ready_to_harvest": {
     "enabled": false,
     "species": [

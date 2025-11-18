@@ -429,9 +429,10 @@ class MagicGardenClient:
         # Check for room override
         room_id_override = self.game_state.get("room_id_override")
         last_room = self.config.last_room
+        search_main_rooms = self.config.search_main_rooms
 
         # Determine which rooms to try
-        all_rooms = [f"MG{num}" for num in range(1, 16)]
+        all_rooms = [f"MG{num}" for num in range(1, 16)] if search_main_rooms else []
 
         def prioritize_room(preferred_room, rooms):
             if not preferred_room:
@@ -443,18 +444,35 @@ class MagicGardenClient:
             return ordered
 
         if room_id_override:
-            print(
-                f"\nUsing room from --room-id parameter first (falling back to others if needed): {room_id_override}"
-            )
-            rooms_to_try = prioritize_room(room_id_override, all_rooms)
+            if search_main_rooms:
+                print(
+                    f"\nUsing room from --room-id parameter first (falling back to others if needed): {room_id_override}"
+                )
+                rooms_to_try = prioritize_room(room_id_override, all_rooms)
+            else:
+                print(
+                    f"\nUsing room from --room-id parameter (main room searching disabled): {room_id_override}"
+                )
+                rooms_to_try = [room_id_override]
         elif last_room:
-            print(
-                f"\nTrying last connected room first (will fall back to others if busy): {last_room}"
-            )
-            rooms_to_try = prioritize_room(last_room, all_rooms)
+            if search_main_rooms:
+                print(
+                    f"\nTrying last connected room first (will fall back to others if busy): {last_room}"
+                )
+                rooms_to_try = prioritize_room(last_room, all_rooms)
+            else:
+                print(
+                    f"\nUsing last connected room only (main room searching disabled): {last_room}"
+                )
+                rooms_to_try = [last_room]
         else:
-            print("\nSearching for available room...")
-            rooms_to_try = all_rooms
+            if search_main_rooms:
+                print("\nSearching for available room...")
+                rooms_to_try = all_rooms
+            else:
+                print("\nERROR: No room specified and main room searching is disabled!")
+                print("Either enable search_main_rooms in config or specify a room with --room-id")
+                return False
 
         # Try rooms
         websocket = None
@@ -500,7 +518,11 @@ class MagicGardenClient:
         if not websocket:
             print("\n" + "!" * 60)
             print("ERROR: Could not find an available room!")
-            print("All rooms (MG1-MG15) are full or unreachable.")
+            if search_main_rooms:
+                print("All rooms (MG1-MG15) are full or unreachable.")
+            else:
+                print(f"The specified room '{rooms_to_try[0] if rooms_to_try else 'N/A'}' is full or unreachable.")
+                print("Try enabling search_main_rooms in config to search other rooms.")
             print("!" * 60)
             return False
 

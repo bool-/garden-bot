@@ -58,6 +58,7 @@ class BotConfig:
     player_id: str
     cookies: str
     last_room: Optional[str]
+    search_main_rooms: bool  # Whether to search MG1-MG15 or only use specified room
     harvest: HarvestConfig
     shop: ShopConfig
     pet_food: PetFoodConfig
@@ -140,18 +141,9 @@ def load_config() -> BotConfig:
     # Player ID
     player_id = config.get("player_id")
     if not player_id:
-        # Try old key name for backwards compatibility
-        player_id = config.get("playerId")
-        if player_id:
-            # Migrate from old key to new key
-            config["player_id"] = player_id
-            config.pop("playerId", None)
-            config_dirty = True
-        else:
-            # Generate new player ID
-            player_id = generate_player_id()
-            config["player_id"] = player_id
-            config_dirty = True
+        player_id = generate_player_id()
+        config["player_id"] = player_id
+        config_dirty = True
 
     # Harvest config
     ready_config = config.get("ready_to_harvest")
@@ -315,14 +307,16 @@ def load_config() -> BotConfig:
 
     # Last room
     last_room = config.get("room_id")
-    if not last_room:
-        # Try old key name for backwards compatibility
-        last_room = config.get("lastRoom")
-        if last_room:
-            # Migrate from old key to new key
-            config["room_id"] = last_room
-            config.pop("lastRoom", None)
-            config_dirty = True
+
+    # Room search configuration
+    search_main_rooms = config.get("search_main_rooms")
+    if search_main_rooms is None:
+        # Default to True for searching main rooms
+        search_main_rooms = True
+        config["search_main_rooms"] = True
+        config_dirty = True
+
+    print(f"Loaded room search config: search_main_rooms={search_main_rooms}")
 
     # Save if modified
     if config_dirty:
@@ -370,6 +364,7 @@ def load_config() -> BotConfig:
         player_id=player_id,
         cookies=cookies,
         last_room=last_room,
+        search_main_rooms=search_main_rooms,
         harvest=harvest_config_obj,
         shop=shop_config_obj,
         pet_food=pet_food_config_obj,
@@ -387,8 +382,6 @@ def save_last_room(room_id: str):
             config = {}
 
         config["room_id"] = room_id
-        # Remove old key if present
-        config.pop("lastRoom", None)
 
         with open(CONFIG_FILE, "w") as f:
             json.dump(config, f, indent=2)
