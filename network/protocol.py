@@ -156,13 +156,19 @@ def log_message_to_file(direction: str, message, timestamp=None):
             f.write(f"[{timestamp}] {direction}\n")
             f.write(f"{'='*80}\n")
             if isinstance(message, str):
-                parsed = json.loads(message)
-                f.write(json.dumps(parsed, indent=2))
+                # Try to parse as JSON, but if it fails, log as raw text
+                try:
+                    parsed = json.loads(message)
+                    f.write(json.dumps(parsed, indent=2))
+                except json.JSONDecodeError:
+                    # Not JSON - log as plain text
+                    f.write(message)
             else:
                 f.write(json.dumps(message, indent=2))
             f.write("\n")
-    except:
-        pass
+    except Exception as e:
+        # Only suppress file I/O errors, not JSON parsing errors
+        print(f"Warning: Failed to log message to file: {e}")
 
 
 # ========== Message Processing ==========

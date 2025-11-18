@@ -135,10 +135,11 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
         if pet_slot:
             pet_id = pet_slot.get("id")
             if pet_id:
-                # NOTE: The server never provides initial pet positions in userSlots,
-                # so we intentionally seed each pet at a random local coordinate.
-                # This keeps pets visible immediately after login and avoids future
-                # reviewers flagging the randomization as a bug.
+                # NOTE: On first connect the server never publishes pet positions in
+                # userSlots, so without sending an initial PetPositions packet they
+                # would remain "inside" and completely invisible. We intentionally
+                # seed each pet at a random local coordinate so the client sends a
+                # position update and the pets appear immediately.
                 local_pos = {
                     "x": random.randint(0, 22),
                     "y": random.randint(0, 11),

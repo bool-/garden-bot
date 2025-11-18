@@ -189,7 +189,7 @@ async def find_and_harvest(
     mutation_count = chosen_plant["mutation_count"]
 
     print(
-        f"Found harvestable {species} at slot {tile_slot} (mutations: {mutation_count}, priority: {priority_msg})"
+        f"Found harvestable {species} at tile {tile_slot}, slot {slots_index} (mutations: {mutation_count}, priority: {priority_msg})"
     )
 
     # Harvest the crop
@@ -200,7 +200,7 @@ async def find_and_harvest(
         "slotsIndex": slots_index,
     }
     await client.send(harvest_message)
-    print(f"Harvested {species} from slot {tile_slot}")
+    print(f"Harvested {species} from tile {tile_slot}, slot {slots_index}")
 
     # Wait a moment for the harvest to process
     await asyncio.sleep(0.3)

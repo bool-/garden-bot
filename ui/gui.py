@@ -364,13 +364,23 @@ class MagicGardenGUI:
         for tile_obj in tile_objects.values():
             if tile_obj and tile_obj.get("objectType") == "plant":
                 slots = tile_obj.get("slots", [])
-                if slots:
-                    slot = slots[0]
-                    end_time = slot.get("endTime", 0)
-                    if current_time >= end_time:
-                        mature_count += 1
-                    else:
-                        growing_count += 1
+                # For multi-slot plants (bushes), count the tile once based on aggregate status
+                has_mature = False
+                has_growing = False
+
+                for slot in slots:
+                    if slot:
+                        end_time = slot.get("endTime", 0)
+                        if current_time >= end_time:
+                            has_mature = True
+                        else:
+                            has_growing = True
+
+                # Count tile as mature if ANY slot is mature, otherwise growing
+                if has_mature:
+                    mature_count += 1
+                elif has_growing:
+                    growing_count += 1
 
         empty_count = 200 - len(tile_objects)
         return growing_count, mature_count, empty_count
@@ -401,19 +411,37 @@ class MagicGardenGUI:
         if obj_type == "plant":
             slots = tile_obj.get("slots", [])
             if slots:
-                slot = slots[0]
-                end_time = slot.get("endTime", 0)
-                mutations = slot.get("mutations", [])
-                mutation_count = len(mutations)
+                # For multi-slot plants (bushes), find the slot with most mutations
+                best_slot = None
+                max_mutation_count = -1
 
-                if current_time >= end_time:
-                    # Mature
-                    if mutation_count >= min_mutations:
-                        return "#00e676", "#1fec84"  # Ready to harvest - vibrant green
+                for slot in slots:
+                    if not slot:
+                        continue
+
+                    mutations = slot.get("mutations", [])
+                    mutation_count = len(mutations)
+
+                    if mutation_count > max_mutation_count:
+                        max_mutation_count = mutation_count
+                        best_slot = slot
+
+                # Use the best slot to determine color
+                if best_slot:
+                    end_time = best_slot.get("endTime", 0)
+                    mutations = best_slot.get("mutations", [])
+                    mutation_count = len(mutations)
+
+                    if current_time >= end_time:
+                        # Mature
+                        if mutation_count >= min_mutations:
+                            return "#00e676", "#1fec84"  # Ready to harvest - vibrant green
+                        else:
+                            return "#ff9100", "#ffa726"  # Grown but not mutated - orange
                     else:
-                        return "#ff9100", "#ffa726"  # Grown but not mutated - orange
+                        return "#ffd93d", "#ffe066"  # Growing - yellow
                 else:
-                    return "#ffd93d", "#ffe066"  # Growing - yellow
+                    return "#5a5a6e", "#6a6a7e"  # Empty plant slot
             else:
                 return "#5a5a6e", "#6a6a7e"  # Empty plant slot
         elif obj_type == "egg":
@@ -615,11 +643,7 @@ class MagicGardenGUI:
                         tid, tile_obj = tile_info
                         fill_color, outline_color = self._get_tile_color(tile_obj, min_mutations)
 
-                        # Warn if multiple slots (should be rare)
-                        if tile_obj.get("objectType") == "plant":
-                            slots = tile_obj.get("slots", [])
-                            if len(slots) > 1:
-                                print(f"DEBUG: tile {tid} has {len(slots)} slots; rendering first only")
+                        # Multiple slots (bushes) are now handled properly in color calculation
                     else:
                         fill_color, outline_color = "#4a4a5e", "#5a5a6e"  # Empty
 
@@ -637,10 +661,18 @@ class MagicGardenGUI:
                         if tile_obj.get("objectType") == "plant":
                             slots = tile_obj.get("slots", [])
                             if slots:
-                                mutations = slots[0].get("mutations", [])
-                                self._draw_mutation_indicators(
-                                    self.garden_canvas, x, y, tile_size, mutations
-                                )
+                                # For multi-slot plants, show the highest mutation count
+                                max_mutations = []
+                                for slot in slots:
+                                    if slot:
+                                        mutations = slot.get("mutations", [])
+                                        if len(mutations) > len(max_mutations):
+                                            max_mutations = mutations
+
+                                if max_mutations:
+                                    self._draw_mutation_indicators(
+                                        self.garden_canvas, x, y, tile_size, max_mutations
+                                    )
 
         # Draw overlays
         self._draw_pets(self.garden_canvas, player_slot, border_offset, tile_size)
