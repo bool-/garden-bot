@@ -446,13 +446,16 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
                         # Wait for the harvest to be processed and added to inventory
                         await asyncio.sleep(1.0)
 
-                        # Refresh inventory to include newly harvested produce
+                        # Refresh slot_data to include newly harvested produce and updated garden state
                         our_slot = game_state.get_player_slot()
                         if not our_slot:
                             print("Could not refresh inventory - player slot unavailable")
                             break
 
-                        fresh_slot_data = our_slot.get("data", {})
+                        # IMPORTANT: Update slot_data so subsequent find_and_harvest calls
+                        # see the latest garden state (not the stale snapshot from line 363)
+                        slot_data = our_slot.get("data", {})
+                        fresh_slot_data = slot_data
                         fresh_inv_data = fresh_slot_data.get("inventory", {})
                         fresh_items_list = fresh_inv_data.get("items", [])
 
@@ -485,10 +488,14 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
                             print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with freshly harvested {required_food}")
 
                             # Update the main produce_by_species to reflect this usage
-                            if required_food in produce_by_species:
-                                produce_by_species[required_food] = fresh_produce_by_species[required_food][1:]
-                                if not produce_by_species[required_food]:
-                                    del produce_by_species[required_food]
+                            # IMPORTANT: Use fresh_produce_by_species[required_food][1:] to get remaining items
+                            # This works even if required_food wasn't in produce_by_species before (empty inventory case)
+                            remaining_items = fresh_produce_by_species[required_food][1:]
+                            if remaining_items:
+                                produce_by_species[required_food] = remaining_items
+                            elif required_food in produce_by_species:
+                                # Only delete if it existed before; no need to delete what wasn't there
+                                del produce_by_species[required_food]
 
                             fed = True
                             break
