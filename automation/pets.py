@@ -377,12 +377,8 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
                     produce_by_species[species] = []
                 produce_by_species[species].append(item_id)
 
-    # Get pet food mappings from config (or use default if not set)
-    pet_food_map = (
-        config.mapping
-        if config and config.mapping
-        else {"Bee": ["OrangeTulip"], "Chicken": ["Aloe"], "Worm": ["Aloe"]}
-    )
+    # Get pet food mappings from config (honor empty mapping - no defaults)
+    pet_food_map = config.mapping if config else {}
 
     # Check each active pet slot
     for pet_slot in pet_slots:

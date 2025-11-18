@@ -39,6 +39,8 @@ class HarvestConfig:
 @dataclass
 class PetFoodConfig:
     """Pet food mapping configuration"""
+    feeding_enabled: bool  # Whether to enable automatic pet feeding
+    movement_enabled: bool  # Whether to enable automatic pet movement
     mapping: Dict[str, List[str]]  # {pet_species: [food_species_priority_list]}
 
 
@@ -189,12 +191,44 @@ def load_config() -> BotConfig:
     print(f"Loaded shop config: Auto-buy enabled = {normalized_shop.get('enabled', False)}")
 
     # Pet food mapping
-    pet_food_mapping = config.get("pet_food_mapping")
-    if isinstance(pet_food_mapping, dict):
+    pet_food_raw = config.get("pet_food_mapping")
+
+    # Get enable/disable flags (default to False for new installations, True for backwards compatibility)
+    pet_feeding_enabled = config.get("pet_feeding_enabled")
+    pet_movement_enabled = config.get("pet_movement_enabled")
+
+    # If pet_food_mapping exists AND has content but enable flags don't exist,
+    # default to enabled for backwards compatibility.
+    # Empty mappings should default to disabled.
+    has_pet_mapping = isinstance(pet_food_raw, dict) and len(pet_food_raw) > 0
+
+    if has_pet_mapping and pet_feeding_enabled is None:
+        # Backwards compatibility: existing non-empty mapping enables feeding
+        pet_feeding_enabled = True
+        config["pet_feeding_enabled"] = True
+        config_dirty = True
+    elif pet_feeding_enabled is None:
+        # New installation or empty mapping - default to False
+        pet_feeding_enabled = False
+        config["pet_feeding_enabled"] = False
+        config_dirty = True
+
+    if has_pet_mapping and pet_movement_enabled is None:
+        # Backwards compatibility: existing non-empty mapping enables movement
+        pet_movement_enabled = True
+        config["pet_movement_enabled"] = True
+        config_dirty = True
+    elif pet_movement_enabled is None:
+        # New installation or empty mapping - default to False
+        pet_movement_enabled = False
+        config["pet_movement_enabled"] = False
+        config_dirty = True
+
+    if isinstance(pet_food_raw, dict):
         # Normalize pet food config to use lists
         # Convert old format {"Bee": "OrangeTulip"} to new format {"Bee": ["OrangeTulip"]}
         pet_food_config = {}
-        for pet_species, food_value in pet_food_mapping.items():
+        for pet_species, food_value in pet_food_raw.items():
             if isinstance(food_value, list):
                 # Already in new format
                 pet_food_config[pet_species] = food_value
@@ -206,20 +240,22 @@ def load_config() -> BotConfig:
                 continue
 
         # Update config if normalization changed anything
-        if pet_food_config != pet_food_mapping:
+        if pet_food_config != pet_food_raw:
             config["pet_food_mapping"] = pet_food_config
             config_dirty = True
     else:
-        # Default pet food mapping (using new list format)
-        pet_food_config = {
-            "Bee": ["OrangeTulip"],
-            "Chicken": ["Aloe"],
-            "Worm": ["Aloe"]
-        }
-        config["pet_food_mapping"] = pet_food_config
-        config_dirty = True
+        # No pet_food_mapping provided - honor empty config, don't force defaults
+        pet_food_config = {}
+        if "pet_food_mapping" not in config:
+            config["pet_food_mapping"] = {}
+            config_dirty = True
 
-    print(f"Loaded pet food mapping: {pet_food_config}")
+    print(f"Loaded pet automation config: feeding_enabled={pet_feeding_enabled}, movement_enabled={pet_movement_enabled}")
+    if pet_food_config:
+        print(f"  Pet food mapping: {pet_food_config}")
+    else:
+        print(f"  Pet food mapping: (empty - no automatic feeding)")
+
 
     # Reconnection config
     reconnection_config = config.get("reconnection")
@@ -302,6 +338,8 @@ def load_config() -> BotConfig:
     )
 
     pet_food_config_obj = PetFoodConfig(
+        feeding_enabled=pet_feeding_enabled,
+        movement_enabled=pet_movement_enabled,
         mapping=pet_food_config
     )
 

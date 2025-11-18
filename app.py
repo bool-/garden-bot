@@ -47,12 +47,17 @@ async def run_bot(config, game_state, headless=False):
     client.register_task(
         lambda: harvest.run_auto_harvest(client, game_state, config.harvest)
     )
-    client.register_task(
-        lambda: pets.run_pet_feeder(client, game_state, config.pet_food)
-    )
-    client.register_task(
-        lambda: pets.run_pet_mover(client, game_state)
-    )
+
+    # Only register pet automation tasks if enabled
+    if config.pet_food.feeding_enabled:
+        client.register_task(
+            lambda: pets.run_pet_feeder(client, game_state, config.pet_food)
+        )
+    if config.pet_food.movement_enabled:
+        client.register_task(
+            lambda: pets.run_pet_mover(client, game_state)
+        )
+
     client.register_task(
         lambda: shop.run_shop_buyer(client, game_state, config.shop)
     )

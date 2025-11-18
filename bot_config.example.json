@@ -3,7 +3,16 @@
   "cookies": "YOUR_COOKIE_STRING_HERE",
   "lastRoom": "MG1",
   "ready_to_harvest": {
-    "min_mutations": 3
+    "enabled": false,
+    "species": [
+      "Sunflower",
+      "Bamboo"
+    ],
+    "species_to_replant": [
+      "Bamboo"
+    ],
+    "min_mutations": 3,
+    "check_interval_seconds": 30
   },
   "shop": {
     "enabled": false,
@@ -32,9 +41,12 @@
       }
     }
   },
+  "pet_feeding_enabled": false,
+  "pet_movement_enabled": false,
   "pet_food_mapping": {
     "Bee": [
-      "Daffodil"
+      "Daffodil",
+      "Lily"
     ],
     "Chicken": [
       "Aloe"
@@ -42,5 +54,10 @@
     "Worm": [
       "Aloe"
     ]
+  },
+  "reconnection": {
+    "max_retries": 5,
+    "base_delay": 5,
+    "max_delay": 60
   }
 }
