@@ -3,6 +3,9 @@ bot_config.json
 messages.log
 game-files/
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

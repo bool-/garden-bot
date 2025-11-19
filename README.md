@@ -1,5 +1,8 @@
 # Magic Garden Bot
 
+> **⚠️ EDUCATIONAL USE ONLY**
+> This project is created strictly for educational purposes to demonstrate WebSocket protocols, bot automation techniques, and GUI development with Python. Use of automation tools may violate the terms of service of Magic Garden. The authors do not condone or encourage the use of this software to gain unfair advantages in the game. Use at your own risk.
+
 A bot for Magic Garden that connects via WebSocket, provides real-time game state visualization, and automates gameplay tasks.
 
 ## Quick Start
@@ -52,29 +55,33 @@ The bot uses a modular architecture:
 ## Features
 
 ### Core Functionality
-✅ **WebSocket connection** - Full game protocol support
-✅ **Thread-safe state management** - Proper locking for concurrent access
-✅ **Automatic message logging** - All WebSocket traffic saved to `messages.log`
-✅ **Persistent player ID** - Saved in `bot_config.json`
-✅ **Real-time updates** - UI refreshes on every game state change
-✅ **Emulates browser behavior** - Proper pings, pongs, position updates
+
+- ✅ **WebSocket connection** - Full game protocol support
+- ✅ **Thread-safe state management** - Proper locking for concurrent access
+- ✅ **Automatic message logging** - All WebSocket traffic saved to `messages.log`
+- ✅ **Persistent player ID** - Saved in `bot_config.json`
+- ✅ **Real-time updates** - UI refreshes on every game state change
+- ✅ **Emulates browser behavior** - Proper pings, pongs, position updates
 
 ### Automation Features
-✅ **Auto-harvest** - Automatically harvest mature crops, replant, and sell
-  - Enable/disable via config
-  - Configurable species list to auto-harvest
-  - Separate list for species that need replanting (perennials like Bamboo/Sunflower vs annuals like Carrot/Tomato)
-  - Configurable minimum mutations (e.g., only harvest crops with 3+ mutations)
-  - Prioritizes highest mutation count when selling
-  - Harvests ALL ready plants of each species (not just one)
-  - Automatically sells all harvested crops after each cycle
-  - Configurable check interval
-✅ **Pet automation** - Feed hungry pets and move them around garden
-  - Configurable food limits per species
-  - Random movement within garden bounds
-✅ **Shop automation** - Auto-purchase seeds and eggs when low
-  - Configurable minimum stock levels
-  - Coin balance checking
+
+**✅ Auto-harvest** - Automatically harvest mature crops, replant, and sell
+- Enable/disable via config
+- Configurable species list to auto-harvest
+- Separate list for species that need replanting (perennials like Sunflower keep growing, annuals like Carrot/Tomato/Bamboo need replanting)
+- Configurable minimum mutations (e.g., only harvest crops with 3+ mutations)
+- Prioritizes highest mutation count when selling
+- Harvests ALL ready plants of each species (not just one)
+- Automatically sells all harvested crops after each cycle
+- Configurable check interval
+
+**✅ Pet automation** - Feed hungry pets and move them around garden
+- Configurable food limits per species
+- Random movement within garden bounds
+
+**✅ Shop automation** - Auto-purchase seeds and eggs when low
+- Configurable minimum stock levels
+- Coin balance checking
 
 ### Protocol Support
 
@@ -137,7 +144,3 @@ All WebSocket traffic is logged to `messages.log`:
 - Protocol events (Welcome, PartialState, etc.)
 
 Perfect for debugging and understanding the game protocol!
-
-## Legacy Files
-
-⚠️ **`bot_gui.py`** is a legacy monolithic version from before the refactoring. Use `app.py` instead for the current modular architecture with proper separation of concerns.
