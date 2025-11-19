@@ -7,18 +7,31 @@ A bot for Magic Garden that connects via WebSocket, provides real-time game stat
 
 ## Quick Start
 
+### Installation
+
+```bash
+pip install -r requirements.txt
+```
+
 ### GUI Mode (Recommended)
 
+**PyQt6 UI (Default):**
 ```bash
 python app.py
 ```
 
-Launches the full graphical interface with:
-- **Live world map** - Visual grid showing your position, pets, and other players
-- **Garden viewer** - See your actual garden with crops and growth stages
-- **Real-time inventory** - Seeds, tools, pets, eggs with quantities
-- **Statistics dashboard** - Message counts, connection status
-- **Three-panel layout** - World view, Garden view, Stats/Inventory
+Launches the modern PyQt6 interface with:
+- **VS Code Dark+ theme** - Professional dark theme inspired by VS Code
+- **Fully responsive design** - Resizable window and panels
+- **Garden visualization** - Real-time garden grid with dynamic scaling
+- **Tabbed interface** - Inventory, Pets, Shop, Journal, and Stats tabs
+- **Live console** - Real-time bot activity logging
+- **Connection info** - Player position and network statistics
+
+**Tkinter UI (Legacy):**
+```bash
+python app.py --ui tkinter
+```
 
 ### Headless Mode
 
@@ -49,7 +62,10 @@ The bot uses a modular architecture:
   - `harvest.py` - Auto-harvest and replant crops
   - `pets.py` - Pet feeding and movement
   - `shop.py` - Automatic seed/egg purchasing
-- **`ui/gui.py`** - Tkinter GUI interface
+- **`ui/`** - User interface modules:
+  - `qt_gui.py` - Modern PyQt6 interface (default)
+  - `qt_components/` - Modular UI components (garden, inventory, pets, etc.)
+  - `gui.py` - Legacy Tkinter interface
 - **`utils/`** - Coordinate conversion, validation, etc.
 
 ## Features
@@ -62,6 +78,21 @@ The bot uses a modular architecture:
 - ✅ **Persistent player ID** - Saved in `bot_config.json`
 - ✅ **Real-time updates** - UI refreshes on every game state change
 - ✅ **Emulates browser behavior** - Proper pings, pongs, position updates
+
+### UI Features
+
+**PyQt6 UI (Default):**
+- ✅ **VS Code Dark+ theme** - Professional color scheme
+- ✅ **Component-based architecture** - Modular, maintainable code
+- ✅ **Fully responsive** - Dynamic window and panel resizing
+- ✅ **Garden visualization** - Real-time grid with mutation indicators
+- ✅ **Tabbed interface** - Inventory, Pets, Shop, Journal, Stats
+- ✅ **Copy-friendly panels** - Content updates don't interrupt text selection
+- ✅ **Scroll preservation** - Panel scroll position maintained during updates
+
+**Tkinter UI (Legacy):**
+- ✅ **Three-panel layout** - World view, Garden view, Stats/Inventory
+- ✅ **Simple interface** - Lightweight alternative
 
 ### Automation Features
 

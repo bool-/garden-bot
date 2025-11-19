@@ -7,6 +7,7 @@ Main application that orchestrates the bot, automation tasks, and GUI.
 import asyncio
 import argparse
 import threading
+import sys
 
 from config import load_config
 from game_state import GameState
@@ -27,6 +28,10 @@ def parse_args():
     )
     parser.add_argument(
         "--headless", action="store_true", help="Run in headless mode (no GUI)"
+    )
+    parser.add_argument(
+        "--ui", type=str, choices=["tkinter", "qt"], default="qt",
+        help="Choose UI framework (default: qt)"
     )
     return parser.parse_args()
 
@@ -91,23 +96,45 @@ def main():
         print("Running in headless mode (no GUI)")
         asyncio.run(run_bot(config, game_state, headless=True))
     else:
-        # GUI mode - import tkinter and GUI (only when needed)
-        import tkinter as tk
-        from ui.gui import MagicGardenGUI
+        # GUI mode - choose UI framework
+        if args.ui == "qt":
+            # PyQt6 GUI
+            from PyQt6.QtWidgets import QApplication
+            from ui.qt_gui import MagicGardenGUI
 
-        # Run websocket in thread
-        def run_websocket_thread():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(run_bot(config, game_state, headless=False))
+            # Run websocket in thread
+            def run_websocket_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(run_bot(config, game_state, headless=False))
 
-        ws_thread = threading.Thread(target=run_websocket_thread, daemon=True)
-        ws_thread.start()
+            ws_thread = threading.Thread(target=run_websocket_thread, daemon=True)
+            ws_thread.start()
 
-        # Start GUI
-        root = tk.Tk()
-        app = MagicGardenGUI(root, game_state, config.harvest)
-        root.mainloop()
+            # Start Qt GUI
+            app = QApplication(sys.argv)
+            window = MagicGardenGUI(game_state, config.harvest)
+            window.show()
+            sys.exit(app.exec())
+
+        else:  # tkinter
+            # Tkinter GUI (legacy)
+            import tkinter as tk
+            from ui.gui import MagicGardenGUI
+
+            # Run websocket in thread
+            def run_websocket_thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(run_bot(config, game_state, headless=False))
+
+            ws_thread = threading.Thread(target=run_websocket_thread, daemon=True)
+            ws_thread.start()
+
+            # Start tkinter GUI
+            root = tk.Tk()
+            app = MagicGardenGUI(root, game_state, config.harvest)
+            root.mainloop()
 
 
 if __name__ == "__main__":
