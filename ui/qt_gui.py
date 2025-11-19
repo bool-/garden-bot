@@ -19,6 +19,7 @@ from config import HarvestConfig
 from .qt_components import (
     VSCodeTheme,
     GardenWidget,
+    GardenTabs,
     ConnectionPanel,
     InventoryPanel,
     PetPanel,
@@ -85,10 +86,10 @@ class MagicGardenGUI(QMainWindow):
         self.connection_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         left_layout.addWidget(self.connection_panel)
 
-        # Garden widget (priority expansion)
-        self.garden_widget = GardenWidget(self.game_state, self.harvest_config)
-        self.garden_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        left_layout.addWidget(self.garden_widget, stretch=3)
+        # Garden tabs widget (priority expansion)
+        self.garden_tabs = GardenTabs(self.game_state, self.harvest_config)
+        self.garden_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        left_layout.addWidget(self.garden_tabs, stretch=3)
 
         # Console widget (secondary expansion)
         self.console_widget = ConsoleWidget()
@@ -142,16 +143,15 @@ class MagicGardenGUI(QMainWindow):
         # Update connection panel
         self.connection_panel.update_data()
 
+        # Update all garden tabs
+        self.garden_tabs.update_gardens()
+
         # Extract player slot
         player_slot = self.extract_player_data()
 
         if not player_slot:
             # Waiting for game state
-            self.garden_widget.set_player_slot(None)
             return
-
-        # Update garden
-        self.garden_widget.set_player_slot(player_slot)
 
         # Get slot data
         slot_data = player_slot.get("data", {})

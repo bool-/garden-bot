@@ -14,17 +14,19 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QBrush
 from game_state import GameState
 from config import HarvestConfig
 from utils.coordinates import convert_server_to_local_coords
+from utils.constants import SPAWN_POSITIONS
 from .theme import VSCodeTheme
 
 
 class GardenCanvas(QWidget):
     """Custom widget for rendering the garden grid"""
 
-    def __init__(self, game_state: GameState, harvest_config: Optional[HarvestConfig] = None):
+    def __init__(self, game_state: GameState, harvest_config: Optional[HarvestConfig] = None, slot_index: Optional[int] = None):
         super().__init__()
         self.game_state = game_state
         self.harvest_config = harvest_config
         self.player_slot = None
+        self.slot_index = slot_index  # Specific slot index for coordinate conversion
 
         # Grid configuration
         self.base_tile_size = 28
@@ -51,6 +53,36 @@ class GardenCanvas(QWidget):
         """Update player slot data and trigger repaint"""
         self.player_slot = player_slot
         self.update()
+
+    def _convert_server_to_local_for_slot(self, server_x: int, server_y: int) -> Optional[dict]:
+        """Convert server coordinates to local coordinates for this canvas's slot.
+
+        Args:
+            server_x: Server X coordinate
+            server_y: Server Y coordinate
+
+        Returns:
+            Dict with 'x' and 'y' local coordinates, or None if conversion fails
+        """
+        slot_idx = self.slot_index
+        if slot_idx is None:
+            # Use game state's current slot if not specified
+            slot_idx = self.game_state.get_user_slot_index()
+
+        if slot_idx is None or slot_idx >= len(SPAWN_POSITIONS):
+            return None
+
+        if server_x is None or server_y is None:
+            return None
+
+        # Get spawn position for this slot
+        spawn_pos = SPAWN_POSITIONS[slot_idx]
+        local_spawn = {"x": 11, "y": 11}  # Player spawns at bottom center
+
+        # Convert: local = local_spawn + (server - spawn_pos)
+        local_x = local_spawn["x"] + (server_x - spawn_pos["x"])
+        local_y = local_spawn["y"] + (server_y - spawn_pos["y"])
+        return {"x": int(local_x), "y": int(local_y)}
 
     def paintEvent(self, event):
         """Render the garden grid"""
@@ -303,8 +335,9 @@ class GardenCanvas(QWidget):
             if not isinstance(position, dict):
                 continue
 
-            local_coords = convert_server_to_local_coords(
-                position.get("x"), position.get("y"), self.game_state
+            # Use slot-specific coordinate conversion
+            local_coords = self._convert_server_to_local_for_slot(
+                position.get("x"), position.get("y")
             )
             if not local_coords:
                 continue
@@ -335,7 +368,8 @@ class GardenCanvas(QWidget):
         if server_x is None or server_y is None:
             return
 
-        local_coords = convert_server_to_local_coords(server_x, server_y, self.game_state)
+        # Use slot-specific coordinate conversion
+        local_coords = self._convert_server_to_local_for_slot(server_x, server_y)
         if not local_coords:
             return
 

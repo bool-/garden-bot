@@ -6,6 +6,7 @@ Modular UI components following VS Code Dark+ theme.
 
 from .theme import VSCodeTheme
 from .garden_canvas import GardenCanvas, GardenWidget
+from .garden_tabs import GardenTabs
 from .connection_panel import ConnectionPanel
 from .inventory_panel import InventoryPanel
 from .pet_panel import PetPanel
@@ -18,6 +19,7 @@ __all__ = [
     'VSCodeTheme',
     'GardenCanvas',
     'GardenWidget',
+    'GardenTabs',
     'ConnectionPanel',
     'InventoryPanel',
     'PetPanel',

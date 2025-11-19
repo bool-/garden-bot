@@ -306,3 +306,48 @@ class GameState:
                     return deepcopy(slot)
 
             return None
+
+    def get_all_user_slots(self) -> list[Dict[str, Any]]:
+        """Get all user slots in the current room.
+
+        Returns a list of all user slots, where each slot contains both 'data'
+        and 'petSlotInfos' along with the 'playerId' identifying the owner.
+
+        Returns:
+            List of deep copies of all user slots, empty list if none found
+        """
+        with self._lock:
+            if not self._full_state:
+                return []
+
+            child_state = self._full_state.get("child", {})
+            if child_state.get("scope") != "Quinoa":
+                return []
+
+            quinoa_state = child_state.get("data", {})
+            user_slots = quinoa_state.get("userSlots", [])
+
+            # Return deep copies of all non-None slots
+            return [deepcopy(slot) for slot in user_slots if slot]
+
+    def get_player_name_by_id(self, player_id: str) -> Optional[str]:
+        """Get the display name for a given player ID.
+
+        Args:
+            player_id: The player ID to look up
+
+        Returns:
+            Player name if found, otherwise the player ID itself, or None if not in room
+        """
+        with self._lock:
+            if not self._full_state:
+                return None
+
+            room_data = self._full_state.get("data", {})
+            players = room_data.get("players", [])
+
+            for player in players:
+                if player and player.get("id") == player_id:
+                    return player.get("name") or player_id
+
+            return None
