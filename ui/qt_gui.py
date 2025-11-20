@@ -8,8 +8,14 @@ import sys
 from typing import Optional
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStatusBar, QTabWidget, QSplitter, QSizePolicy
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QStatusBar,
+    QTabWidget,
+    QSplitter,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
@@ -27,14 +33,16 @@ from .qt_components import (
     JournalPanel,
     StatsPanel,
     ConsoleWidget,
-    ConsoleRedirector
+    ConsoleRedirector,
 )
 
 
 class MagicGardenGUI(QMainWindow):
     """Main PyQt6 GUI window for Magic Garden Bot"""
 
-    def __init__(self, game_state: GameState, harvest_config: Optional[HarvestConfig] = None):
+    def __init__(
+        self, game_state: GameState, harvest_config: Optional[HarvestConfig] = None
+    ):
         super().__init__()
         self.game_state = game_state
         self.harvest_config = harvest_config
@@ -44,8 +52,8 @@ class MagicGardenGUI(QMainWindow):
         self.resize(1400, 900)
         self.setMinimumSize(1000, 700)  # Minimum size for usability
 
-        # Set window icon
-        self.setWindowIcon(self._create_icon())
+        # Set application icon
+        self.setWindowIcon(QIcon("magic_garden_bot.ico"))
 
         # Apply theme
         self.setStyleSheet(self.theme.get_stylesheet())
@@ -83,17 +91,23 @@ class MagicGardenGUI(QMainWindow):
 
         # Connection panel (fixed size, doesn't expand)
         self.connection_panel = ConnectionPanel(self.game_state)
-        self.connection_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.connection_panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         left_layout.addWidget(self.connection_panel)
 
         # Garden tabs widget (priority expansion)
         self.garden_tabs = GardenTabs(self.game_state, self.harvest_config)
-        self.garden_tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.garden_tabs.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         left_layout.addWidget(self.garden_tabs, stretch=3)
 
         # Console widget (secondary expansion)
         self.console_widget = ConsoleWidget()
-        self.console_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.console_widget.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
         left_layout.addWidget(self.console_widget, stretch=1)
 
         splitter.addWidget(left_panel)
@@ -101,8 +115,12 @@ class MagicGardenGUI(QMainWindow):
         # RIGHT PANEL - Tabs (fixed size, doesn't expand)
         right_panel = QTabWidget()
         right_panel.setDocumentMode(True)
-        right_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        right_panel.setFixedWidth(486)  # Fixed width - calculated for clean garden tile rendering
+        right_panel.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
+        right_panel.setFixedWidth(
+            486
+        )  # Fixed width - calculated for clean garden tile rendering
 
         # Tab 1: Inventory
         self.inventory_panel = InventoryPanel()

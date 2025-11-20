@@ -30,8 +30,11 @@ def parse_args():
         "--headless", action="store_true", help="Run in headless mode (no GUI)"
     )
     parser.add_argument(
-        "--ui", type=str, choices=["tkinter", "qt"], default="qt",
-        help="Choose UI framework (default: qt)"
+        "--ui",
+        type=str,
+        choices=["tkinter", "qt"],
+        default="qt",
+        help="Choose UI framework (default: qt)",
     )
     return parser.parse_args()
 
@@ -59,13 +62,9 @@ async def run_bot(config, game_state, headless=False):
             lambda: pets.run_pet_feeder(client, game_state, config.pet_food)
         )
     if config.pet_food.movement_enabled:
-        client.register_task(
-            lambda: pets.run_pet_mover(client, game_state)
-        )
+        client.register_task(lambda: pets.run_pet_mover(client, game_state))
 
-    client.register_task(
-        lambda: shop.run_shop_buyer(client, game_state, config.shop)
-    )
+    client.register_task(lambda: shop.run_shop_buyer(client, game_state, config.shop))
 
     # Run client
     await client.run()
@@ -100,7 +99,14 @@ def main():
         if args.ui == "qt":
             # PyQt6 GUI
             from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtGui import QIcon
             from ui.qt_gui import MagicGardenGUI
+            import ctypes
+
+            # Set Windows App User Model ID for proper taskbar icon
+            if sys.platform == "win32":
+                myappid = "magicgarden.bot.client.1.0"
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
             # Run websocket in thread
             def run_websocket_thread():
@@ -113,6 +119,7 @@ def main():
 
             # Start Qt GUI
             app = QApplication(sys.argv)
+
             window = MagicGardenGUI(game_state, config.harvest)
             window.show()
             sys.exit(app.exec())
