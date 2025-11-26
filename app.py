@@ -39,7 +39,7 @@ def parse_args():
     return parser.parse_args()
 
 
-async def run_bot(config, game_state, headless=False):
+async def run_bot(config, game_state, headless=False, client_holder=None):
     """
     Run the bot (headless or with GUI).
 
@@ -47,9 +47,15 @@ async def run_bot(config, game_state, headless=False):
         config: Bot configuration
         game_state: Global game state
         headless: Whether running in headless mode
+        client_holder: Optional dict to store client reference for GUI access
     """
     # Create client
     client = MagicGardenClient(game_state, config)
+
+    # Store client reference if holder provided (for GUI thread-safe access)
+    if client_holder is not None:
+        client_holder["client"] = client
+        client_holder["loop"] = asyncio.get_running_loop()
 
     # Register automation task factories (lambdas that create new task instances)
     client.register_task(
@@ -108,11 +114,14 @@ def main():
                 myappid = "magicgarden.bot.client.1.0"
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
+            # Holder for client reference (shared between threads)
+            client_holder = {}
+
             # Run websocket in thread
             def run_websocket_thread():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(run_bot(config, game_state, headless=False))
+                loop.run_until_complete(run_bot(config, game_state, headless=False, client_holder=client_holder))
 
             ws_thread = threading.Thread(target=run_websocket_thread, daemon=True)
             ws_thread.start()
@@ -120,7 +129,7 @@ def main():
             # Start Qt GUI
             app = QApplication(sys.argv)
 
-            window = MagicGardenGUI(game_state, config.harvest)
+            window = MagicGardenGUI(game_state, config.harvest, client_holder=client_holder)
             window.show()
             sys.exit(app.exec())
 

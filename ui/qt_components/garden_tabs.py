@@ -52,11 +52,23 @@ class GardenTabs(QWidget):
 
     def update_gardens(self):
         """Update all garden tabs with latest data from all user slots"""
-        all_slots = self.game_state.get_all_user_slots()
+        # Get raw user slots to preserve actual slot indices for coordinate conversion
+        full_state = self.game_state.get_full_state()
+        if not full_state:
+            self.tab_widget.clear()
+            self.canvases.clear()
+            return
+
+        child_state = full_state.get("child", {})
+        if child_state.get("scope") != "Quinoa":
+            self.tab_widget.clear()
+            self.canvases.clear()
+            return
+
+        user_slots = child_state.get("data", {}).get("userSlots", [])
         current_player_id = self.game_state.get_player_id()
 
-        if not all_slots:
-            # Clear all tabs if no data
+        if not user_slots:
             self.tab_widget.clear()
             self.canvases.clear()
             return
@@ -64,8 +76,10 @@ class GardenTabs(QWidget):
         # Track which player IDs we've seen
         active_player_ids = set()
 
-        # Update or create tabs for each slot
-        for slot_index, slot in enumerate(all_slots):
+        # Update or create tabs for each slot - now with correct slot indices
+        for slot_index, slot in enumerate(user_slots):
+            if not slot:
+                continue
             player_id = slot.get("playerId")
             if not player_id:
                 continue
