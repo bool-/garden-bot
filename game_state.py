@@ -276,6 +276,10 @@ class GameState:
 
             quinoa_state = child_state.get("data") or {}
             user_slots = quinoa_state.get("userSlots") or []
+
+            # Clear stale slot index before refresh to avoid using old value on reconnect
+            self._user_slot_index = None
+
             for idx, slot in enumerate(user_slots):
                 if slot and slot.get("playerId") == self._player_id:
                     self._user_slot_index = idx
