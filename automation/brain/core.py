@@ -27,6 +27,8 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         self._bought_restocks = set()  # (shop, restockId) we already shopped
         self._original_pets = None  # ids of pets the account had when the bot started
         self._journal_pending = set()  # (species, variant) logged, not yet in server state
+        self._camera_asked_at = 0.0
+        self._camera_accepted = False
         self._data_build = str(eco.GAME.get("build"))
         self._unbuyable = self._load_unbuyable()  # (shop, item key) the server rejected
 
@@ -263,10 +265,10 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
                  "sell_pets_step": "selling pets", "hatch_step": "hatching eggs",
                  "harvest_valuable_step": "harvesting", "plant_step": "planting",
                  "upgrade_step": "upgrading tiles", "harvest_cheap_step": "harvesting cheap crops",
-                 "journal_step": "logging journal"}
+                 "journal_step": "logging journal", "camera_step": "getting the Camera"}
         if await self._handle_requests(s):
             return True
-        for step in (self.care_for_pets, self.improve_team_step, self.journal_step,
+        for step in (self.care_for_pets, self.improve_team_step, self.camera_step, self.journal_step,
                      self.shop_if_restocked, self.sell_if_needed, self.sell_pets_step, self.hatch_step,
                      self.harvest_valuable_step, self.plant_step, self.upgrade_step,
                      self.harvest_cheap_step):

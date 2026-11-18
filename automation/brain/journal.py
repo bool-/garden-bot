@@ -63,15 +63,55 @@ class JournalMixin:
         return [v for v in new if (species, v) not in self._journal_pending]
 
     def _has_camera(self, s) -> bool:
-        """LogItem needs the Camera (a one-time tool no shop sells). Without
-        it the server rejects every log, so the whole Journal job waits."""
+        """LogItem needs the Camera. It isn't sold anywhere: an NPC brings it
+        (see camera_step), so until then only the Camera errand runs."""
         inv = s["data"].get("inventory") or {}
-        have = any(i.get("toolId") == "Camera" for i in s["items"]) or any(
+        return any(i.get("toolId") == "Camera" for i in s["items"]) or any(
             t.get("id") == "Camera" for t in inv.get("toolRing") or [])
-        if not have and not getattr(self, "_camera_note", False):
-            self._camera_note = True
-            self._log("journal: no Camera on this account, so logging is paused (the Camera isn't sold in shops)")
-        return have
+
+    def _my_npc_visit(self, s) -> Optional[dict]:
+        visits = (self.gs.get_full_state() or {}).get("child", {}).get("data", {}).get("npcVisits") or {}
+        me = self.gs.get_player_id()
+        for v in (visits.values() if isinstance(visits, dict) else visits):
+            if isinstance(v, dict) and v.get("forUserId") == me:
+                return v
+        return None
+
+    async def camera_step(self, s) -> bool:
+        """Get the Camera the way the game hands it out: trying to harvest a
+        crop with a variant the Journal lacks, with no Camera, summons an NPC
+        (RequestNpcVisit, trigger "harvest") who offers one; accept the gift."""
+        if not self.journal_enabled or self._has_camera(s):
+            return False
+        visit = self._my_npc_visit(s)
+        if visit:
+            if (visit.get("phase") == "offering" and visit.get("bringsCamera")
+                    and not visit.get("gaveCamera") and not self._camera_accepted):
+                await asyncio.sleep(random.uniform(1.0, 2.5))  # read the offer
+                await self.client.send_command({"type": "AcceptNpcVisitGift"})
+                self._camera_accepted = True
+                self._log(f"journal: accepted the Camera from {visit.get('npcId', 'a visitor')}")
+                return True
+            return False  # visitor on the way; wait for the offer
+        self._camera_accepted = False
+        if time.time() - self._camera_asked_at < 300:
+            return False
+        for tile_id, obj in s["garden"].items():
+            if (obj or {}).get("objectType") != "plant":
+                continue
+            for sl in obj.get("slots") or []:
+                if not sl or s["now"] < sl.get("endTime", 0) or sl.get("locked"):
+                    continue
+                if not self._crop_new(s, sl.get("species"), sl.get("size", 50), sl.get("mutations")):
+                    continue
+                if not await walk_to_tile(self.client, self.gs, int(tile_id)):
+                    return False
+                await self.client.send_command({"type": "RequestNpcVisit", "trigger": {
+                    "kind": "harvest", "crop": sl.get("species"), "mutations": list(sl.get("mutations") or [])}})
+                self._camera_asked_at = time.time()
+                self._log(f"journal: no Camera yet, a visitor is bringing one (asked at a {sl.get('species')})")
+                return True
+        return False
 
     def _journal_active(self, s) -> bool:
         return self.journal_enabled and self._has_camera(s)
@@ -131,6 +171,10 @@ class JournalMixin:
         targets = self._journal_targets(s)
         if not targets:
             return False
+        # Hold the Camera and take the photo, like the real client, then log.
+        await self._select(s, "Camera")
+        await self._send({"scopePath": SCOPE, "type": "TakePhoto"})
+        await asyncio.sleep(random.uniform(0.3, 0.8))
         # Bag and pets first (no walking), then garden crops nearest-first.
         slot_index = self.gs.get_user_slot_index()
         here = current_position(self.gs)
