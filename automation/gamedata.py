@@ -24,7 +24,10 @@ from typing import Dict, Optional
 
 from utils.constants import USER_AGENT
 
-DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "game_data.json")
+BUNDLED_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "game_data.json")
+# Where the live copy is kept. The server sets GAME_DATA_PATH to its writable
+# state dir; locally it is the bundled file. Missing -> seeded from bundled.
+DATA_PATH = os.environ.get("GAME_DATA_PATH") or BUNDLED_PATH
 SITE = "https://magicgarden.gg"
 MAX_CHUNKS = 250
 
@@ -217,8 +220,13 @@ def _looks_complete(d: dict) -> bool:
 
 # ------------------------------------------------------------------- caching
 def load() -> dict:
-    with open(DATA_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    for path in (DATA_PATH, BUNDLED_PATH):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def ensure_current(room: str, force: bool = False) -> dict:
@@ -248,10 +256,14 @@ def ensure_current(room: str, force: bool = False) -> dict:
     fresh["extractedAt"] = int(time.time())
     fresh["_source"] = ("Extracted automatically from the magicgarden.gg web client by automation/gamedata.py. "
                         "Do not hand-edit; it is rewritten on every new build.")
-    tmp = DATA_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(fresh, f, indent=1)
-    os.replace(tmp, DATA_PATH)
+    try:
+        tmp = DATA_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(fresh, f, indent=1)
+        os.replace(tmp, DATA_PATH)
+    except OSError as e:  # never take the bot down over a cache write
+        print(f"[gamedata] could not save {DATA_PATH} ({e}); using the fresh tables in memory only")
+        return fresh
     print(f"[gamedata] updated: {len(fresh['crops'])} crops, {len(fresh['pets'])} pets, "
           f"{len(fresh['eggs'])} eggs, {len(fresh['mutations'])} mutations")
     return fresh

@@ -28,8 +28,18 @@ GROWTH_MUTATIONS: set = set()
 def reload() -> str:
     """(Re)load data/game_data.json in place, so every module holding these
     dicts sees the new build's numbers. Returns the build id."""
-    with open(_DATA_PATH, encoding="utf-8") as f:
-        data = json.load(f)
+    data = None
+    for path in (os.environ.get("GAME_DATA_PATH"), _DATA_PATH):
+        if not path:
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            break
+        except (OSError, ValueError):
+            continue
+    if data is None:
+        raise RuntimeError("no game data found")
     GAME.clear(); GAME.update(data)
     for target, key in ((CROPS, "crops"), (PETS, "pets"), (MUTATIONS, "mutations"),
                         (STALLS, "stalls"), (EGGS, "eggs")):
