@@ -16,15 +16,31 @@ from typing import Dict, List, Optional
 
 _DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "game_data.json")
 
-with open(_DATA_PATH, encoding="utf-8") as _f:
-    GAME = json.load(_f)
+GAME: Dict[str, dict] = {}
+CROPS: Dict[str, dict] = {}
+PETS: Dict[str, dict] = {}
+MUTATIONS: Dict[str, dict] = {}
+STALLS: Dict[str, dict] = {}
+EGGS: Dict[str, dict] = {}
+GROWTH_MUTATIONS: set = set()
 
-CROPS: Dict[str, dict] = GAME["crops"]
-PETS: Dict[str, dict] = GAME["pets"]
-MUTATIONS: Dict[str, dict] = GAME["mutations"]
-STALLS: Dict[str, dict] = GAME["stalls"]
 
-GROWTH_MUTATIONS = {name for name, m in MUTATIONS.items() if m["group"] == "Growth"}
+def reload() -> str:
+    """(Re)load data/game_data.json in place, so every module holding these
+    dicts sees the new build's numbers. Returns the build id."""
+    with open(_DATA_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    GAME.clear(); GAME.update(data)
+    for target, key in ((CROPS, "crops"), (PETS, "pets"), (MUTATIONS, "mutations"),
+                        (STALLS, "stalls"), (EGGS, "eggs")):
+        target.clear()
+        target.update(data.get(key) or {})
+    GROWTH_MUTATIONS.clear()
+    GROWTH_MUTATIONS.update(n for n, m in MUTATIONS.items() if m.get("group") == "Growth")
+    return str(data.get("build"))
+
+
+reload()
 GRANTER_ABILITIES = {"GoldGranter", "RainbowGranter"}
 
 
@@ -86,3 +102,67 @@ def best_food_species(pet_species: str, available: List[str]) -> Optional[str]:
     if fitting:
         return max(fitting, key=base_price)
     return min(options, key=base_price)
+
+
+# ----------------------------------------------------------------- pets/eggs
+
+
+def pet_max_strength(species: str, scale) -> int:
+    """Client formula: 80 at scale <= 1, 100 at the species' maxScale."""
+    max_scale = (PETS.get(species) or {}).get("maxScale", 2)
+    try:
+        s = float(scale)
+    except (TypeError, ValueError):
+        return 80
+    if s <= 1:
+        return 80
+    if s >= max_scale:
+        return 100
+    return int(80 + 20 * (s - 1) / (max_scale - 1))
+
+
+def pet_growth_multiplier(pet: dict) -> int:
+    """Gold/Rainbow pets carry GoldGranter/RainbowGranter: their stamp is the
+    crop multiplier they hand out."""
+    abilities = set(pet.get("abilities") or [])
+    muts = set(pet.get("mutations") or [])
+    if "RainbowGranter" in abilities or "Rainbow" in muts:
+        return 50
+    if "GoldGranter" in abilities or "Gold" in muts:
+        return 25
+    return 1
+
+
+# Rough worth of non-granter abilities for a money garden (relative units; a
+# Gold stamp is 25). Weather granters/boosts stack under Gold/Rainbow, sell
+# boosts and coin finders pay directly, pet-mutation/size boosts make better
+# hatches. Taken from the client's ability table (build 2071).
+ABILITY_VALUE = {
+    "SellBoostIV": 6, "SellBoostIII": 5, "SellBoostII": 4, "SellBoostI": 3,
+    "CoinFinderIV": 5, "CoinFinderIII": 4, "CoinFinderII": 2, "CoinFinderI": 1,
+    "DoubleHarvest": 4, "ProduceRefund": 2,
+    "FrostGranter": 5, "AmberlitGranter": 5, "ThunderstruckGranter": 4, "DawnlitGranter": 3,
+    "SnowGranter": 1.5, "RainDance": 1.5,
+    "ProduceMutationBoostII": 3, "ProduceMutationBoost": 2, "ProduceScaleBoostII": 3, "ProduceScaleBoost": 2,
+    "PetMutationBoostIII": 4, "PetMutationBoostII": 3, "PetMutationBoost": 2,
+    "PetHatchSizeBoostII": 2, "PetHatchSizeBoost": 1.5, "DoubleHatchII": 2, "DoubleHatch": 1.5,
+    "EggGrowthBoostII": 1.5, "EggGrowthBoostII_NEW": 1.2, "EggGrowthBoost": 1,
+}
+
+
+def pet_score(pet: dict) -> float:
+    """How much a pet is worth having active. Gold/Rainbow stamping (x25/x50
+    on every stamped crop) dominates; the pet's other money abilities add on
+    top; size (max strength = how often abilities hit) scales it all."""
+    growth = pet_growth_multiplier(pet)
+    strength = pet_max_strength(pet.get("petSpecies"), pet.get("targetScale"))
+    extras = sum(ABILITY_VALUE.get(a, 0) for a in pet.get("abilities") or [])
+    return (growth + extras) * strength
+
+
+def is_granter(pet: dict) -> bool:
+    return pet_growth_multiplier(pet) > 1
+
+
+def egg_hatch_seconds(egg_id: str) -> int:
+    return int((EGGS.get(egg_id) or {}).get("hatchS", 10 ** 9))

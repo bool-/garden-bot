@@ -31,6 +31,7 @@ from .qt_components import (
     GardenTabs,
     ConnectionPanel,
     InventoryPanel,
+    BrainPanel,
     PetPanel,
     ShopPanel,
     JournalPanel,
@@ -108,6 +109,7 @@ class MagicGardenGUI(QMainWindow):
 
         # Garden tabs widget (priority expansion)
         self.garden_tabs = GardenTabs(self.game_state, self.harvest_config)
+        self.garden_tabs.set_client_holder(self.client_holder)
         self.garden_tabs.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -132,27 +134,33 @@ class MagicGardenGUI(QMainWindow):
             486
         )  # Fixed width - calculated for clean garden tile rendering
 
+        # Tab 0: Brain (autonomous bot controls + status)
+        self.brain_panel = BrainPanel()
+        self.brain_panel.set_client_holder(self.client_holder)
+        right_panel.addTab(self.brain_panel, "Brain")
+        self.right_panel = right_panel
+
         # Tab 1: Inventory
         self.inventory_panel = InventoryPanel()
         self.inventory_panel.selection_made.connect(self._on_inventory_selection)
-        right_panel.addTab(self.inventory_panel, "🎒 Inventory")
+        right_panel.addTab(self.inventory_panel, "Inventory")
 
         # Tab 2: Pets
         self.pet_panel = PetPanel()
-        right_panel.addTab(self.pet_panel, "🐾 Pets")
+        right_panel.addTab(self.pet_panel, "Pets")
 
         # Tab 3: Shop
         self.shop_panel = ShopPanel()
         self.shop_panel.set_client_holder(self.client_holder)
-        right_panel.addTab(self.shop_panel, "🛒 Shop")
+        right_panel.addTab(self.shop_panel, "Shop")
 
         # Tab 4: Journal
         self.journal_panel = JournalPanel()
-        right_panel.addTab(self.journal_panel, "📖 Journal")
+        right_panel.addTab(self.journal_panel, "Journal")
 
         # Tab 5: Stats
         self.stats_panel = StatsPanel()
-        right_panel.addTab(self.stats_panel, "📊 Stats")
+        right_panel.addTab(self.stats_panel, "Stats")
 
         splitter.addWidget(right_panel)
 
@@ -173,6 +181,9 @@ class MagicGardenGUI(QMainWindow):
         # Update connection panel
         self.connection_panel.update_data()
 
+        # Update brain panel (works without game state: shows disabled/idle text)
+        self.brain_panel.update_data()
+
         # Update all garden tabs
         self.garden_tabs.update_gardens()
 
@@ -190,7 +201,9 @@ class MagicGardenGUI(QMainWindow):
         self.inventory_panel.update_data(slot_data)
 
         # Update pet panel
-        self.pet_panel.update_data(slot_data)
+        brain = self.client_holder.get("brain")
+        plan = getattr(brain, "last_plan", None) if brain is not None else None
+        self.pet_panel.update_data(slot_data, plan)
 
         # Update shop panel with quinoa-level data (shops are shared across all players)
         full_state = self.game_state["full_state"]
@@ -214,19 +227,7 @@ class MagicGardenGUI(QMainWindow):
 
     def _optimistic_move(self, new_x: int, new_y: int):
         """Optimistically update player position in local state"""
-        def update(full_state):
-            player_id = self.game_state.get_player_id()
-            if not player_id:
-                return
-            child = full_state.get("child", {})
-            if child.get("scope") != "Quinoa":
-                return
-            user_slots = child.get("data", {}).get("userSlots", [])
-            for slot in user_slots:
-                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
-                    slot["position"] = {"x": new_x, "y": new_y}
-                    break
-        self.game_state.update_full_state_locked(update)
+        self.game_state.set_player_position(new_x, new_y)
         # Trigger immediate UI update
         self.garden_tabs.update_gardens()
 
@@ -330,6 +331,17 @@ class MagicGardenGUI(QMainWindow):
             super().keyPressEvent(event)
             return
 
+        # Manual moves would fight the brain: require it to be paused first
+        controls = (
+            Qt.Key.Key_W, Qt.Key.Key_Up, Qt.Key.Key_S, Qt.Key.Key_Down,
+            Qt.Key.Key_A, Qt.Key.Key_Left, Qt.Key.Key_D, Qt.Key.Key_Right,
+            Qt.Key.Key_Space,
+        )
+        brain = self.client_holder.get("brain")
+        if key in controls and brain is not None and not getattr(brain, "paused", False):
+            self._warn_brain_running()
+            return
+
         # Get current player position from game state
         player_slot = self.game_state.get_player_slot()
         if not player_slot:
@@ -338,10 +350,10 @@ class MagicGardenGUI(QMainWindow):
             super().keyPressEvent(event)
             return
 
-        current_pos = player_slot.get("position")
-        if not current_pos:
+        current_pos = self.game_state.get_player_position()
+        if not current_pos or current_pos.get("x") is None or current_pos.get("y") is None:
             if key == Qt.Key.Key_Space:
-                print("Space pressed but no current_pos in player_slot")
+                print("Space pressed but player position is unknown")
             super().keyPressEvent(event)
             return
 
@@ -382,6 +394,14 @@ class MagicGardenGUI(QMainWindow):
 
         super().keyPressEvent(event)
 
+    def _warn_brain_running(self):
+        """Print (at most every few seconds) why manual controls are ignored"""
+        import time
+        now = time.time()
+        if now - getattr(self, "_last_brain_warn", 0) > 3:
+            self._last_brain_warn = now
+            print("Manual controls ignored: pause the brain first (Brain tab -> Pause)")
+
     def _handle_interact(self, client, loop, player_slot):
         """Handle Space key interaction - harvest or plant"""
         slot_data = player_slot.get("data", {})
@@ -390,9 +410,9 @@ class MagicGardenGUI(QMainWindow):
         inventory = slot_data.get("inventory", {})
 
         # Get player position and convert to tile ID
-        position = player_slot.get("position")
-        if not position:
-            print("No position found in player_slot")
+        position = self.game_state.get_player_position()
+        if not position or position.get("x") is None or position.get("y") is None:
+            print("Player position unknown")
             return
 
         # Convert server coords to local, then to tile ID

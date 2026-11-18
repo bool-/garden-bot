@@ -9,6 +9,7 @@ from .garden_canvas import GardenCanvas, GardenWidget
 from .garden_tabs import GardenTabs
 from .connection_panel import ConnectionPanel
 from .inventory_panel import InventoryPanel
+from .brain_panel import BrainPanel
 from .pet_panel import PetPanel
 from .shop_panel import ShopPanel
 from .journal_panel import JournalPanel
@@ -22,6 +23,7 @@ __all__ = [
     'GardenTabs',
     'ConnectionPanel',
     'InventoryPanel',
+    'BrainPanel',
     'PetPanel',
     'ShopPanel',
     'JournalPanel',

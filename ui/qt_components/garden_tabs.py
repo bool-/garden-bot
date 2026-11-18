@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt
 
 from game_state import GameState
 from config import HarvestConfig
-from .garden_canvas import GardenCanvas
+from .garden_canvas import GardenCanvas, _legend_items
 from .theme import VSCodeTheme
 
 
@@ -26,6 +26,7 @@ class GardenTabs(QWidget):
 
         # Store canvas instances by player_id
         self.canvases = {}
+        self.client_holder = {}
 
         # Main layout
         main_layout = QVBoxLayout()
@@ -49,6 +50,11 @@ class GardenTabs(QWidget):
         group.setLayout(group_layout)
         main_layout.addWidget(group)
         self.setLayout(main_layout)
+
+    def set_client_holder(self, client_holder):
+        self.client_holder = client_holder or {}
+        for canvas in self.canvases.values():
+            canvas.set_client_holder(self.client_holder)
 
     def update_gardens(self):
         """Update all garden tabs with latest data from all user slots"""
@@ -99,6 +105,7 @@ class GardenTabs(QWidget):
             if player_id not in self.canvases:
                 # Create new canvas with slot index for coordinate conversion
                 canvas = GardenCanvas(self.game_state, self.harvest_config, slot_index=slot_index)
+                canvas.set_client_holder(self.client_holder)
                 self.canvases[player_id] = canvas
 
                 # Add tab - current player's tab goes first
@@ -147,16 +154,7 @@ class GardenTabs(QWidget):
         legend_layout.setContentsMargins(0, 5, 0, 5)
         legend_layout.setSpacing(12)
 
-        legend_items = [
-            (self.theme.GARDEN_PLAYER, "You"),
-            (self.theme.GARDEN_READY, "Ready"),
-            (self.theme.GARDEN_GROWN, "Grown"),
-            (self.theme.GARDEN_GROWING, "Growing"),
-            (self.theme.GARDEN_EGG_READY, "Ready Egg"),
-            (self.theme.GARDEN_EGG_GROWING, "Growing Egg"),
-            (self.theme.GARDEN_PET, "Pet"),
-            (self.theme.GARDEN_EMPTY, "Empty"),
-        ]
+        legend_items = _legend_items(self.theme)
 
         for color, label in legend_items:
             item_layout = QHBoxLayout()

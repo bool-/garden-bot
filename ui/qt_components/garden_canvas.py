@@ -8,14 +8,32 @@ import time
 from typing import Optional
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGroupBox, QSizePolicy
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QEvent
 from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QBrush
+from PyQt6.QtWidgets import QToolTip
 
 from game_state import GameState
 from config import HarvestConfig
 from utils.coordinates import convert_server_to_local_coords
 from utils.constants import SPAWN_POSITIONS
+from automation import economy as eco
 from .theme import VSCodeTheme
+
+DEFAULT_HOLD_MIN_BASE = 100_000
+
+
+def _legend_items(theme):
+    return [
+        (theme.GARDEN_PLAYER, "You"),
+        (theme.GARDEN_STAMPED, "Stamped (harvest)"),
+        (theme.GARDEN_HELD, "Held for stamp"),
+        (theme.GARDEN_READY, "Ready"),
+        (theme.GARDEN_GROWING, "Growing"),
+        (theme.GARDEN_EGG_READY, "Ready Egg"),
+        (theme.GARDEN_EGG_GROWING, "Growing Egg"),
+        (theme.GARDEN_PET, "Pet"),
+        (theme.GARDEN_EMPTY, "Empty"),
+    ]
 
 
 class GardenCanvas(QWidget):
@@ -27,6 +45,9 @@ class GardenCanvas(QWidget):
         self.harvest_config = harvest_config
         self.player_slot = None
         self.slot_index = slot_index  # Specific slot index for coordinate conversion
+        self.client_holder = {}  # for brain.cfg (hold threshold); set by GardenTabs
+        self._geom = None  # (tile_size, offset_x, offset_y) from the last paint
+        self.setMouseTracking(True)
 
         # Grid configuration
         self.base_tile_size = 28
@@ -84,6 +105,127 @@ class GardenCanvas(QWidget):
         local_y = local_spawn["y"] + (server_y - spawn_pos["y"])
         return {"x": int(local_x), "y": int(local_y)}
 
+    def set_client_holder(self, client_holder):
+        self.client_holder = client_holder or {}
+
+    def _hold_min_base(self) -> int:
+        brain = self.client_holder.get("brain") if self.client_holder else None
+        cfg = getattr(brain, "cfg", None) or {}
+        try:
+            return int(cfg.get("hold_for_gold_min_base_price", DEFAULT_HOLD_MIN_BASE))
+        except (TypeError, ValueError):
+            return DEFAULT_HOLD_MIN_BASE
+
+    def _now_ms(self) -> int:
+        """Server time (full state currentTime) when known, else the local clock."""
+        try:
+            return int(self.game_state.get_full_state()["child"]["data"]["currentTime"])
+        except Exception:
+            return int(time.time() * 1000)
+
+    def _is_own_garden(self) -> bool:
+        """True when this canvas shows the user's own slot (the only one whose
+        player position we know)."""
+        if self.slot_index is None:
+            return True
+        own = self.game_state.get_user_slot_index()
+        if own is not None:
+            return own == self.slot_index
+        slot = self.player_slot or {}
+        pid = self.game_state.get_player_id()
+        return bool(pid) and (slot.get("userId") or slot.get("playerId")) == pid
+
+    def _layout_geometry(self):
+        """(tile_size, offset_x, offset_y) for the current widget size."""
+        tile = min(self.width() / self.visual_cols, self.height() / self.visual_rows)
+        tile = max(tile, 10)
+        offset_x = (self.width() - tile * self.visual_cols) / 2
+        offset_y = (self.height() - tile * self.visual_rows) / 2
+        return tile, offset_x, offset_y
+
+    @staticmethod
+    def _visual_to_tile_id(vrow: int, vcol: int, garden_cols=20) -> Optional[int]:
+        if vrow < 1 or vrow > 10 or vcol < 1 or vcol > 21 or vcol == 11:
+            return None
+        col = vcol - 1 if vcol < 11 else vcol - 2
+        return (vrow - 1) * garden_cols + col
+
+    def _classify_plant(self, tile_obj, now_ms, hold_min):
+        """-> 'stamped' | 'held' | 'ready' | 'growing' | None"""
+        best = None
+        rank = {"growing": 0, "ready": 1, "held": 2, "stamped": 3}
+        for slot in tile_obj.get("slots") or []:
+            if not slot:
+                continue
+            species = slot.get("species") or tile_obj.get("species")
+            if now_ms < slot.get("endTime", 0):
+                state = "growing"
+            elif eco.has_growth_mutation(slot.get("mutations")):
+                state = "stamped"
+            elif eco.base_price(species) >= hold_min:
+                state = "held"
+            else:
+                state = "ready"
+            if best is None or rank[state] > rank[best]:
+                best = state
+        return best
+
+    def event(self, ev):
+        if ev.type() == QEvent.Type.ToolTip:
+            text = self._tooltip_at(ev.pos().x(), ev.pos().y())
+            if text:
+                QToolTip.showText(ev.globalPos(), text, self)
+            else:
+                QToolTip.hideText()
+                ev.ignore()
+            return True
+        return super().event(ev)
+
+    def _tooltip_at(self, px: int, py: int) -> Optional[str]:
+        if not self.player_slot:
+            return None
+        tile, ox, oy = self._geom or self._layout_geometry()
+        vcol = int((px - ox) // tile)
+        vrow = int((py - oy) // tile)
+        tile_id = self._visual_to_tile_id(vrow, vcol)
+        if tile_id is None:
+            return None
+        tile_objects = ((self.player_slot.get("data") or {}).get("garden") or {}).get("tileObjects") or {}
+        obj = tile_objects.get(str(tile_id))
+        if not obj:
+            return f"Tile {tile_id}: empty"
+        lines = [f"Tile {tile_id}"]
+        now = self._now_ms()
+        if obj.get("objectType") == "plant":
+            hold_min = self._hold_min_base()
+            for slot in obj.get("slots") or []:
+                if not slot:
+                    continue
+                species = slot.get("species") or obj.get("species") or "?"
+                muts = slot.get("mutations") or []
+                value = eco.crop_value(species, slot.get("size", 50), muts)
+                end = slot.get("endTime", 0)
+                if now >= end:
+                    status = "ripe"
+                else:
+                    status = f"ripe in {max(0, (end - now) // 1000)}s"
+                lines.append(
+                    f"{species} ({status}) size {slot.get('size', '?')}\n"
+                    f"  mutations: {', '.join(muts) if muts else 'none'}\n"
+                    f"  value: {value:,} coins (base {eco.base_price(species):,})"
+                )
+            state = self._classify_plant(obj, now, hold_min)
+            if state == "stamped":
+                lines.append("-> stamped, bot will harvest")
+            elif state == "held":
+                lines.append(f"-> held for a Gold/Rainbow stamp (base >= {hold_min:,})")
+        elif obj.get("objectType") == "egg":
+            ready = now >= obj.get("maturedAt", 0)
+            lines.append(f"Egg {obj.get('eggId', '?')} ({'ready' if ready else 'growing'})")
+        else:
+            lines.append(str(obj.get("objectType")))
+        return "\n".join(lines)
+
     def paintEvent(self, event):
         """Render the garden grid"""
         painter = QPainter(self)
@@ -105,8 +247,8 @@ class GardenCanvas(QWidget):
         # Build position map for fast lookup
         position_map = self._build_tile_position_map(tile_objects)
 
-        # Get config
-        min_mutations = self.harvest_config.min_mutations if self.harvest_config else 3
+        now_ms = self._now_ms()
+        hold_min = self._hold_min_base()
 
         # Calculate dynamic tile size to fill available space
         available_width = self.width()
@@ -124,6 +266,7 @@ class GardenCanvas(QWidget):
         total_height = tile_size_float * self.visual_rows
         offset_x = (available_width - total_width) / 2
         offset_y = (available_height - total_height) / 2
+        self._geom = (tile_size_float, offset_x, offset_y)
 
         # Draw grid
         for row in range(self.visual_rows):
@@ -142,7 +285,7 @@ class GardenCanvas(QWidget):
                     tile_info = position_map.get((row, col))
                     if tile_info:
                         _, tile_obj = tile_info
-                        fill_color, outline_color = self._get_tile_color(tile_obj, min_mutations)
+                        fill_color, outline_color = self._get_tile_color(tile_obj, now_ms, hold_min)
                     else:
                         fill_color = self.theme.get_qcolor(self.theme.GARDEN_EMPTY)
                         outline_color = self.theme.get_qcolor(self.theme.GARDEN_EMPTY_BORDER)
@@ -198,50 +341,23 @@ class GardenCanvas(QWidget):
 
         return position_map
 
-    def _get_tile_color(self, tile_obj, min_mutations):
-        """Determine fill and outline color for tile"""
-        current_time = int(time.time() * 1000)
+    def _get_tile_color(self, tile_obj, now_ms, hold_min):
+        """Determine fill and outline color for tile (by crop value)"""
+        current_time = now_ms
         obj_type = tile_obj.get("objectType")
+        c = self.theme.get_qcolor
 
         if obj_type == "plant":
-            slots = tile_obj.get("slots", [])
-            if slots:
-                # Find best slot
-                best_slot = None
-                max_mutation_count = -1
-
-                for slot in slots:
-                    if not slot:
-                        continue
-
-                    mutations = slot.get("mutations", [])
-                    mutation_count = len(mutations)
-
-                    if mutation_count > max_mutation_count:
-                        max_mutation_count = mutation_count
-                        best_slot = slot
-
-                if best_slot:
-                    end_time = best_slot.get("endTime", 0)
-                    mutations = best_slot.get("mutations", [])
-                    mutation_count = len(mutations)
-
-                    if current_time >= end_time:
-                        if mutation_count >= min_mutations:
-                            return (self.theme.get_qcolor(self.theme.GARDEN_READY),
-                                    self.theme.get_qcolor(self.theme.GARDEN_READY_BORDER))
-                        else:
-                            return (self.theme.get_qcolor(self.theme.GARDEN_GROWN),
-                                    self.theme.get_qcolor(self.theme.GARDEN_GROWN_BORDER))
-                    else:
-                        return (self.theme.get_qcolor(self.theme.GARDEN_GROWING),
-                                self.theme.get_qcolor(self.theme.GARDEN_GROWING_BORDER))
-                else:
-                    return (self.theme.get_qcolor(self.theme.GARDEN_EMPTY),
-                            self.theme.get_qcolor(self.theme.GARDEN_EMPTY_BORDER))
-            else:
-                return (self.theme.get_qcolor(self.theme.GARDEN_EMPTY),
-                        self.theme.get_qcolor(self.theme.GARDEN_EMPTY_BORDER))
+            state = self._classify_plant(tile_obj, now_ms, hold_min)
+            if state == "stamped":
+                return c(self.theme.GARDEN_STAMPED), c(self.theme.GARDEN_STAMPED_BORDER)
+            if state == "held":
+                return c(self.theme.GARDEN_HELD), c(self.theme.GARDEN_HELD_BORDER)
+            if state == "ready":
+                return c(self.theme.GARDEN_READY), c(self.theme.GARDEN_READY_BORDER)
+            if state == "growing":
+                return c(self.theme.GARDEN_GROWING), c(self.theme.GARDEN_GROWING_BORDER)
+            return c(self.theme.GARDEN_EMPTY), c(self.theme.GARDEN_EMPTY_BORDER)
 
         elif obj_type == "egg":
             matured_at = tile_obj.get("maturedAt", 0)
@@ -318,6 +434,24 @@ class GardenCanvas(QWidget):
                 painter.drawEllipse(indicator_x, indicator_y, indicator_size, indicator_size)
                 break
 
+    def _pet_position(self, slot_info):
+        """Current server position of a pet from its motion path."""
+        motion = slot_info.get("motion")
+        if not isinstance(motion, dict):
+            return None
+        path = motion.get("path")
+        if not isinstance(path, list) or not path:
+            return None
+        idx = len(path) - 1
+        step = motion.get("stepDurationMs")
+        started = motion.get("startedAtMs")
+        if isinstance(step, (int, float)) and step > 0 and isinstance(started, (int, float)):
+            elapsed = self._now_ms() - started
+            if elapsed >= 0:
+                idx = min(idx, int(elapsed // step))
+        pt = path[idx]
+        return pt if isinstance(pt, dict) else None
+
     def _draw_pets(self, painter, tile_size, offset_x, offset_y):
         """Draw pet markers"""
         if not self.player_slot:
@@ -331,11 +465,10 @@ class GardenCanvas(QWidget):
             if not isinstance(slot_info, dict):
                 continue
 
-            position = slot_info.get("position")
-            if not isinstance(position, dict):
+            position = self._pet_position(slot_info)
+            if not position:
                 continue
 
-            # Use slot-specific coordinate conversion
             local_coords = self._convert_server_to_local_for_slot(
                 position.get("x"), position.get("y")
             )
@@ -346,7 +479,6 @@ class GardenCanvas(QWidget):
             if local_x < 0 or local_x > 22 or local_y < 0 or local_y > 11:
                 continue
 
-            # Use float calculations for accurate positioning
             center_x = int(offset_x + local_x * tile_size + tile_size / 2)
             center_y = int(offset_y + local_y * tile_size + tile_size / 2)
             radius = max(int(tile_size / 3), 4)
@@ -356,11 +488,11 @@ class GardenCanvas(QWidget):
             painter.drawEllipse(center_x - radius, center_y - radius, radius * 2, radius * 2)
 
     def _draw_player(self, painter, tile_size, offset_x, offset_y):
-        """Draw player marker"""
-        if not self.player_slot:
+        """Draw player marker (only on the user's own garden)"""
+        if not self.player_slot or not self._is_own_garden():
             return
 
-        player_pos = self.player_slot.get("position")
+        player_pos = self.game_state.get_player_position()
         if not isinstance(player_pos, dict):
             return
 
@@ -368,16 +500,14 @@ class GardenCanvas(QWidget):
         if server_x is None or server_y is None:
             return
 
-        # Use slot-specific coordinate conversion
         local_coords = self._convert_server_to_local_for_slot(server_x, server_y)
         if not local_coords:
             return
 
         player_x, player_y = local_coords.get("x", -1), local_coords.get("y", -1)
-        if player_x < 0 or player_y < 0:
+        if player_x < 0 or player_y < 0 or player_x > 22 or player_y > 11:
             return
 
-        # Use float calculations for accurate positioning
         center_x = int(offset_x + player_x * tile_size + tile_size / 2)
         center_y = int(offset_y + player_y * tile_size + tile_size / 2)
         radius = max(int(tile_size / 3), 4)
@@ -431,16 +561,7 @@ class GardenWidget(QWidget):
         legend_layout.setContentsMargins(0, 5, 0, 5)
         legend_layout.setSpacing(12)
 
-        legend_items = [
-            (self.theme.GARDEN_PLAYER, "You"),
-            (self.theme.GARDEN_READY, "Ready"),
-            (self.theme.GARDEN_GROWN, "Grown"),
-            (self.theme.GARDEN_GROWING, "Growing"),
-            (self.theme.GARDEN_EGG_READY, "Ready Egg"),
-            (self.theme.GARDEN_EGG_GROWING, "Growing Egg"),
-            (self.theme.GARDEN_PET, "Pet"),
-            (self.theme.GARDEN_EMPTY, "Empty"),
-        ]
+        legend_items = _legend_items(self.theme)
 
         for color, label in legend_items:
             item_layout = QHBoxLayout()

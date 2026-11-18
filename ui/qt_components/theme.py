@@ -50,6 +50,10 @@ class VSCodeTheme:
     GARDEN_GROWN_BORDER = "#e0a890"
     GARDEN_GROWING = "#dcdcaa"      # Growing (yellow)
     GARDEN_GROWING_BORDER = "#f0e8b8"
+    GARDEN_STAMPED = "#ffd21f"      # Gold/Rainbow stamped, bot will harvest (bright gold)
+    GARDEN_STAMPED_BORDER = "#ffffff"
+    GARDEN_HELD = "#e8743b"         # Ripe valuable crop held for a Gold/Rainbow stamp
+    GARDEN_HELD_BORDER = "#ffb088"
     GARDEN_EGG_READY = "#4ec9b0"    # Ready egg (teal)
     GARDEN_EGG_READY_BORDER = "#60d5c0"
     GARDEN_EGG_GROWING = "#c586c0"  # Growing egg (purple)

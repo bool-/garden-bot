@@ -67,6 +67,10 @@ class MagicGardenClient:
         # requestId -> inner command, and the commands the server rejected.
         self._sent_commands: Dict[str, Dict[str, Any]] = {}
         self.rejected_commands: List[Dict[str, Any]] = []
+        # Session tallies the UI shows.
+        self.session_coins_earned = 0
+        self.command_ok = 0
+        self.command_rejected = 0
 
         # Connection lifecycle management
         self._connected = asyncio.Event()
@@ -519,7 +523,13 @@ class MagicGardenClient:
                         result = json.loads(message)
                     except ValueError:
                         result = {}
+                    if result.get("ok"):
+                        self.command_ok += 1
+                        gained = (result.get("currencyGains") or {}).get("coins")
+                        if isinstance(gained, (int, float)):
+                            self.session_coins_earned += int(gained)
                     if result.get("ok") is False:
+                        self.command_rejected += 1
                         cmd = self._sent_commands.get(result.get("requestId"))
                         if cmd:
                             self.rejected_commands.append(cmd)

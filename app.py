@@ -65,10 +65,19 @@ async def run_bot(config, game_state, headless=False, client_holder=None):
         client_holder["loop"] = asyncio.get_running_loop()
 
     if (config.brain or {}).get("enabled"):
+        from automation import economy, gamedata
         from automation.brain import Brain
 
+        # Keep the game tables in step with the live build before playing.
+        room = game_state.get("room_id_override") or config.last_room or "MG1"
+        await asyncio.to_thread(gamedata.ensure_current, room)
+        economy.reload()
+
         print("Brain enabled: feeding, shopping, selling, harvesting and planting on one loop")
-        client.register_task(lambda: Brain(client, game_state, config.brain).run())
+        brain = Brain(client, game_state, config.brain)
+        if client_holder is not None:
+            client_holder["brain"] = brain
+        client.register_task(lambda: brain.run())
         await client.run()
         return
 
