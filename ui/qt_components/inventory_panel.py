@@ -1,366 +1,168 @@
 """
-Inventory Panel Component
-
-Displays player inventory with selectable seeds for planting.
+Inventory: seeds and eggs (select one to plant by hand while paused),
+crops in the bag, tools.
 """
 
-from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QListWidget,
-    QListWidgetItem,
-    QGroupBox,
-    QScrollArea,
-    QFrame,
-)
-from PyQt6.QtCore import Qt, pyqtSignal
+from collections import defaultdict
+from typing import Optional
 
-from .theme import VSCodeTheme
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QGridLayout, QVBoxLayout
+
+from automation import economy as eco
+
+from .theme import Carbon as C, duration, full_number, short_number, spaced
+from .widgets import CarbonTable, Cell, Page, make_label, section_head, set_color, set_text
+from .theme import label_font
 
 
-class InventoryPanel(QWidget):
-    """Panel for displaying inventory with selectable seeds"""
-
-    # Signals emitted when selection changes
-    seed_selected = pyqtSignal(str)  # Emits species name
-    egg_selected = pyqtSignal(str)   # Emits egg ID
-    selection_made = pyqtSignal()    # Emitted when any selection is made (for focus return)
+class InventoryPage(Page):
+    selection_made = pyqtSignal()
 
     def __init__(self):
-        super().__init__()
-        self.theme = VSCodeTheme
-        self._selected_seed = None
-        self._selected_egg = None
-        self._last_seeds = {}
-        self._last_eggs = {}
-        self._last_other_data = ""
+        super().__init__("Inventory", "")
+        self._seed: Optional[str] = None
+        self._egg: Optional[str] = None
 
-        self._setup_ui()
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(C.S5)
+        grid.setVerticalSpacing(C.S4)
+        for i in range(3):
+            grid.setColumnStretch(i, 1)
 
-    def _setup_ui(self):
-        """Setup the UI components"""
-        layout = QVBoxLayout()
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        head, self.seed_note = section_head("Seeds", "")
+        col.addWidget(head)
+        self.seeds = CarbonTable([("Seed", "stretch"), (">Count", 80), (">Base price", 112)],
+                                 selectable=True, fit_height=False)
+        self.seeds.cellClicked.connect(lambda r, _c: self._pick("seed", r))
+        col.addWidget(self.seeds, 1)
+        grid.addLayout(col, 0, 0)
 
-        # Coins display
-        self.coins_label = QLabel("💰 Coins: 0")
-        self.coins_label.setStyleSheet(f"""
-            font-size: 14pt;
-            font-weight: bold;
-            color: {self.theme.WARNING};
-            padding: 8px;
-            background-color: {self.theme.BG_SIDEBAR};
-            border: 1px solid {self.theme.BORDER};
-            border-radius: 4px;
-        """)
-        layout.addWidget(self.coins_label)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        head, self.crop_note = section_head("Crops", "")
+        col.addWidget(head)
+        self.crops = CarbonTable([("Crop", "stretch"), (">Count", 80), (">Value", 112)], fit_height=False)
+        col.addWidget(self.crops, 1)
+        grid.addLayout(col, 0, 1)
 
-        # Seeds section (selectable)
-        seeds_group = QGroupBox("🌱 Seeds (Click to Select)")
-        seeds_layout = QVBoxLayout()
-        seeds_layout.setContentsMargins(4, 8, 4, 4)
+        col = QVBoxLayout()
+        col.setSpacing(0)
+        head, self.egg_note = section_head("Eggs", "")
+        col.addWidget(head)
+        self.eggs = CarbonTable([("Egg", "stretch"), (">Count", 80), (">Hatch time", 112)], selectable=True)
+        self.eggs.cellClicked.connect(lambda r, _c: self._pick("egg", r))
+        col.addWidget(self.eggs)
+        col.addSpacing(C.S4)
+        head, _ = section_head("Tools", "")
+        col.addWidget(head)
+        self.tools = CarbonTable([("Tool", "stretch"), (">Count", 80)])
+        col.addWidget(self.tools)
+        col.addSpacing(C.S4)
+        self.selected = make_label("Nothing selected for hand planting", label_font(), C.TEXT_SECONDARY, wrap=True)
+        col.addWidget(self.selected)
+        col.addStretch(1)
+        grid.addLayout(col, 0, 2)
+        self.outer.addLayout(grid, 1)
 
-        self.seeds_list = QListWidget()
-        self.seeds_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.seeds_list.setMinimumHeight(120)
-        self.seeds_list.setMaximumHeight(200)
-        self.seeds_list.itemClicked.connect(self._on_seed_clicked)
-        self.seeds_list.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {self.theme.BG_INPUT};
-                border: 1px solid {self.theme.BORDER};
-                border-radius: 4px;
-            }}
-            QListWidget::item {{
-                padding: 6px 8px;
-                border-bottom: 1px solid {self.theme.BORDER};
-            }}
-            QListWidget::item:selected {{
-                background-color: {self.theme.ACCENT_BLUE};
-                color: white;
-            }}
-            QListWidget::item:hover {{
-                background-color: {self.theme.BG_HOVER};
-            }}
-        """)
-        seeds_layout.addWidget(self.seeds_list)
-
-        # Selected seed indicator
-        self.selected_label = QLabel("Selected: None")
-        self.selected_label.setStyleSheet(f"""
-            color: {self.theme.SUCCESS};
-            font-weight: bold;
-            padding: 4px;
-        """)
-        seeds_layout.addWidget(self.selected_label)
-
-        seeds_group.setLayout(seeds_layout)
-        layout.addWidget(seeds_group)
-
-        # Eggs section (selectable)
-        eggs_group = QGroupBox("🥚 Eggs (Click to Select)")
-        eggs_layout = QVBoxLayout()
-        eggs_layout.setContentsMargins(4, 8, 4, 4)
-
-        self.eggs_list = QListWidget()
-        self.eggs_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.eggs_list.setMinimumHeight(60)
-        self.eggs_list.setMaximumHeight(100)
-        self.eggs_list.itemClicked.connect(self._on_egg_clicked)
-        self.eggs_list.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {self.theme.BG_INPUT};
-                border: 1px solid {self.theme.BORDER};
-                border-radius: 4px;
-            }}
-            QListWidget::item {{
-                padding: 6px 8px;
-                border-bottom: 1px solid {self.theme.BORDER};
-            }}
-            QListWidget::item:selected {{
-                background-color: {self.theme.ACCENT_TEAL};
-                color: white;
-            }}
-            QListWidget::item:hover {{
-                background-color: {self.theme.BG_HOVER};
-            }}
-        """)
-        eggs_layout.addWidget(self.eggs_list)
-
-        # Selected egg indicator
-        self.selected_egg_label = QLabel("Selected: None")
-        self.selected_egg_label.setStyleSheet(f"""
-            color: {self.theme.ACCENT_TEAL};
-            font-weight: bold;
-            padding: 4px;
-        """)
-        eggs_layout.addWidget(self.selected_egg_label)
-
-        eggs_group.setLayout(eggs_layout)
-        layout.addWidget(eggs_group)
-
-        # Other inventory (tools, produce) - scrollable text
-        other_group = QGroupBox("📦 Other Items")
-        other_layout = QVBoxLayout()
-        other_layout.setContentsMargins(4, 8, 4, 4)
-
-        self.other_label = QLabel()
-        self.other_label.setWordWrap(True)
-        self.other_label.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.other_label.setStyleSheet(f"""
-            color: {self.theme.TEXT_PRIMARY};
-            padding: 8px;
-            background-color: {self.theme.BG_INPUT};
-            border: 1px solid {self.theme.BORDER};
-            border-radius: 4px;
-        """)
-
-        scroll = QScrollArea()
-        scroll.setWidget(self.other_label)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        other_layout.addWidget(scroll)
-
-        other_group.setLayout(other_layout)
-        layout.addWidget(other_group, stretch=1)
-
-        self.setLayout(layout)
-
-    def _on_seed_clicked(self, item: QListWidgetItem):
-        """Handle seed selection"""
-        species = item.data(Qt.ItemDataRole.UserRole)
-        if species:
-            self._selected_seed = species
-            self._selected_egg = None  # Clear egg selection
-            self.selected_label.setText(f"Selected: {species}")
-            self.selected_label.setStyleSheet(f"""
-                color: {self.theme.SUCCESS};
-                font-weight: bold;
-                padding: 4px;
-            """)
-            self.selected_egg_label.setText("Selected: None")
-            self.selected_egg_label.setStyleSheet(f"""
-                color: {self.theme.TEXT_SECONDARY};
-                font-weight: bold;
-                padding: 4px;
-            """)
-            self.eggs_list.clearSelection()
-            self.seed_selected.emit(species)
-            self.selection_made.emit()
-
-    def _on_egg_clicked(self, item: QListWidgetItem):
-        """Handle egg selection"""
-        egg_id = item.data(Qt.ItemDataRole.UserRole)
-        if egg_id:
-            self._selected_egg = egg_id
-            self._selected_seed = None  # Clear seed selection
-            self.selected_egg_label.setText(f"Selected: {egg_id}")
-            self.selected_egg_label.setStyleSheet(f"""
-                color: {self.theme.ACCENT_TEAL};
-                font-weight: bold;
-                padding: 4px;
-            """)
-            self.selected_label.setText("Selected: None")
-            self.selected_label.setStyleSheet(f"""
-                color: {self.theme.TEXT_SECONDARY};
-                font-weight: bold;
-                padding: 4px;
-            """)
-            self.seeds_list.clearSelection()
-            self.egg_selected.emit(egg_id)
-            self.selection_made.emit()
-
-    def get_selected_seed(self) -> str | None:
-        """Get the currently selected seed species"""
-        return self._selected_seed
-
-    def get_selected_egg(self) -> str | None:
-        """Get the currently selected egg ID"""
-        return self._selected_egg
-
-    def update_data(self, slot_data: dict):
-        """Update inventory display"""
-        # Coins
-        coins = slot_data.get("coinsCount", 0)
-        self.coins_label.setText(f"💰 Coins: {coins:,}")
-
-        # Parse inventory
-        inv_data = slot_data.get("inventory", {})
-        items_list = inv_data.get("items", [])
-
-        seeds = {}
-        tools = {}
-        eggs = {}
-        produce = []
-
-        for item in items_list:
-            item_type = item.get("itemType")
-            quantity = item.get("quantity", 0)
-
-            if item_type == "Seed" and "species" in item:
-                seeds[item["species"]] = quantity
-            elif item_type == "Tool" and "toolId" in item:
-                tools[item["toolId"]] = quantity
-            elif item_type == "Egg" and "eggId" in item:
-                eggs[item["eggId"]] = quantity
-            elif item_type == "Produce":
-                produce.append({
-                    "species": item.get("species"),
-                    "mutations": item.get("mutations", []),
-                })
-
-        # Update seeds list only if changed
-        if seeds != self._last_seeds:
-            self._last_seeds = seeds.copy()
-            self._update_seeds_list(seeds)
-
-        # Update eggs list only if changed
-        if eggs != self._last_eggs:
-            self._last_eggs = eggs.copy()
-            self._update_eggs_list(eggs)
-
-        # Update other items (tools and produce only)
-        other_text = self._format_other_items(tools, produce)
-        if other_text != self._last_other_data:
-            self._last_other_data = other_text
-            self.other_label.setText(other_text)
-
-    def _update_seeds_list(self, seeds: dict):
-        """Update the seeds list widget"""
-        # Remember current selection
-        current_selection = self._selected_seed
-
-        self.seeds_list.clear()
-
-        if not seeds:
-            item = QListWidgetItem("No seeds available")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self.seeds_list.addItem(item)
+    # -------------------------------------------------------------- selection
+    def _pick(self, kind: str, row: int):
+        table = self.seeds if kind == "seed" else self.eggs
+        value = table.row_data(row)
+        if not value:
             return
+        if kind == "seed":
+            self._seed, self._egg = value, None
+            self.eggs.clearSelection()
+        else:
+            self._egg, self._seed = value, None
+            self.seeds.clearSelection()
+        self._render_selected()
+        self.selection_made.emit()
 
-        # Add seeds sorted by name
-        for species, count in sorted(seeds.items()):
-            item = QListWidgetItem(f"{species} ({count})")
-            item.setData(Qt.ItemDataRole.UserRole, species)
-            self.seeds_list.addItem(item)
+    def _render_selected(self):
+        if self._seed:
+            set_text(self.selected, f"Selected {spaced(self._seed)} seed. While paused, E plants it on the tile you stand on.")
+            set_color(self.selected, C.TEXT_PRIMARY)
+        elif self._egg:
+            set_text(self.selected, f"Selected {spaced(self._egg)}. While paused, E plants it on the tile you stand on.")
+            set_color(self.selected, C.TEXT_PRIMARY)
+        else:
+            set_text(self.selected, "Nothing selected for hand planting")
+            set_color(self.selected, C.TEXT_SECONDARY)
 
-            # Re-select if this was the previous selection
-            if species == current_selection:
-                item.setSelected(True)
-                self.seeds_list.setCurrentItem(item)
+    def get_selected_seed(self) -> Optional[str]:
+        return self._seed
 
-        # If selection was cleared but we had one, try to restore or clear
-        if current_selection and current_selection not in seeds:
-            self._selected_seed = None
-            self.selected_label.setText("Selected: None (out of stock)")
-            self.selected_label.setStyleSheet(f"""
-                color: {self.theme.ACCENT_ORANGE};
-                font-weight: bold;
-                padding: 4px;
-            """)
+    def get_selected_egg(self) -> Optional[str]:
+        return self._egg
 
-    def _update_eggs_list(self, eggs: dict):
-        """Update the eggs list widget"""
-        # Remember current selection
-        current_selection = self._selected_egg
+    # -------------------------------------------------------------- update
+    def update_data(self, snap):
+        seeds, eggs, tools = defaultdict(int), defaultdict(int), defaultdict(int)
+        crops = defaultdict(lambda: [0, 0])
+        pets = 0
+        for it in snap.items:
+            kind = it.get("itemType")
+            q = int(it.get("quantity", 1) or 0)
+            if kind == "Seed" and it.get("species"):
+                seeds[it["species"]] += q
+            elif kind == "Egg" and it.get("eggId"):
+                eggs[it["eggId"]] += q
+            elif kind == "Tool" and it.get("toolId"):
+                tools[it["toolId"]] += q
+            elif kind == "Produce":
+                c = crops[it.get("species") or "?"]
+                c[0] += 1
+                c[1] += eco.crop_value(it.get("species"), it.get("size", 50), it.get("mutations"))
+            elif kind == "Pet":
+                pets += 1
+        n, cap = snap.bag
+        self.set_helper(f"Bag {n} of {cap}: {sum(1 for _ in seeds)} seed stacks, {sum(v[0] for v in crops.values())} crops, "
+                        f"{pets} pet{'s' if pets != 1 else ''}. Pick a seed or egg to plant by hand while the bot is paused.")
 
-        self.eggs_list.clear()
+        if self._seed and self._seed not in seeds:
+            self._seed = None
+            self._render_selected()
+        if self._egg and self._egg not in eggs:
+            self._egg = None
+            self._render_selected()
 
-        if not eggs:
-            item = QListWidgetItem("No eggs available")
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            self.eggs_list.addItem(item)
+        rows = [[Cell(spaced(s), data=s), Cell(full_number(q), mono=True, right=True),
+                 Cell(short_number(eco.base_price(s)), C.TEXT_SECONDARY, mono=True, right=True)]
+                for s, q in sorted(seeds.items(), key=lambda kv: -eco.base_price(kv[0]))]
+        self.seeds.set_rows(rows, empty="No seeds")
+        set_text(self.seed_note, f"{sum(seeds.values()):,} seeds")
+        self._reselect(self.seeds, self._seed)
+
+        total = sum(v[1] for v in crops.values())
+        rows = [[Cell(spaced(s)), Cell(full_number(v[0]), mono=True, right=True),
+                 Cell(short_number(v[1]), C.MONEY, mono=True, right=True)]
+                for s, v in sorted(crops.items(), key=lambda kv: -kv[1][1])]
+        self.crops.set_rows(rows, empty="No crops in the bag")
+        set_text(self.crop_note, f"worth {short_number(total)}" if crops else "")
+
+        rows = [[Cell(spaced(e), data=e), Cell(full_number(q), mono=True, right=True),
+                 Cell(duration(eco.egg_hatch_seconds(e)) if e in eco.EGGS else "-", C.TEXT_SECONDARY, mono=True, right=True)]
+                for e, q in sorted(eggs.items(), key=lambda kv: eco.egg_hatch_seconds(kv[0]))]
+        self.eggs.set_rows(rows, empty="No eggs")
+        set_text(self.egg_note, f"{sum(eggs.values()):,} eggs" if eggs else "")
+        self._reselect(self.eggs, self._egg)
+
+        rows = [[Cell(spaced(t)), Cell(full_number(q), mono=True, right=True)] for t, q in sorted(tools.items())]
+        self.tools.set_rows(rows, empty="No tools")
+
+    @staticmethod
+    def _reselect(table, value):
+        if not value:
             return
+        for r in range(table.rowCount()):
+            if table.row_data(r) == value:
+                if table.currentRow() != r:
+                    table.selectRow(r)
+                return
 
-        # Add eggs sorted by name
-        for egg_id, count in sorted(eggs.items()):
-            item = QListWidgetItem(f"{egg_id} ({count})")
-            item.setData(Qt.ItemDataRole.UserRole, egg_id)
-            self.eggs_list.addItem(item)
 
-            # Re-select if this was the previous selection
-            if egg_id == current_selection:
-                item.setSelected(True)
-                self.eggs_list.setCurrentItem(item)
-
-        # If selection was cleared but we had one, try to restore or clear
-        if current_selection and current_selection not in eggs:
-            self._selected_egg = None
-            self.selected_egg_label.setText("Selected: None (out of stock)")
-            self.selected_egg_label.setStyleSheet(f"""
-                color: {self.theme.ACCENT_ORANGE};
-                font-weight: bold;
-                padding: 4px;
-            """)
-
-    def _format_other_items(self, tools: dict, produce: list) -> str:
-        """Format tools and produce as text"""
-        lines = []
-
-        # Tools
-        if tools:
-            lines.append("🔧 Tools:")
-            for tool_type, count in sorted(tools.items()):
-                lines.append(f"  {tool_type}: {count}")
-        else:
-            lines.append("🔧 Tools: None")
-
-        lines.append("")
-
-        # Produce
-        if produce:
-            lines.append(f"🌾 Produce: {len(produce)} items")
-            produce_count = {}
-            for item in produce:
-                species = item.get("species", "Unknown")
-                produce_count[species] = produce_count.get(species, 0) + 1
-
-            for species, count in sorted(produce_count.items()):
-                lines.append(f"  {species}: {count}")
-        else:
-            lines.append("🌾 Produce: None")
-
-        return "\n".join(lines)
+InventoryPanel = InventoryPage

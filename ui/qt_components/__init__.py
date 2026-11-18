@@ -1,33 +1,24 @@
 """
-Qt Components for Magic Garden Bot
-
-Modular UI components following VS Code Dark+ theme.
+Qt components for Garden Bot, styled with IBM Carbon (Gray 100).
 """
 
-from .theme import VSCodeTheme
-from .garden_canvas import GardenCanvas, GardenWidget
-from .garden_tabs import GardenTabs
-from .connection_panel import ConnectionPanel
-from .inventory_panel import InventoryPanel
-from .brain_panel import BrainPanel
-from .pet_panel import PetPanel
-from .shop_panel import ShopPanel
-from .journal_panel import JournalPanel
-from .stats_panel import StatsPanel
-from .console_widget import ConsoleWidget, ConsoleRedirector
+from .theme import Carbon, font, font_families, stylesheet
+from .garden_canvas import GardenCanvas, Legend
+from .garden_tabs import GardenTabs, GardenPage
+from .shell import ShellHeader, StatusFooter, TABS
+from .dashboard_page import DashboardPage
+from .pets_page import PetsPage
+from .inventory_panel import InventoryPage, InventoryPanel
+from .shop_panel import ShopPage, ShopPanel
+from .journal_panel import JournalPage, JournalPanel
+from .settings_page import SettingsPage
+from .model import Snapshot, ServerClock
 
 __all__ = [
-    'VSCodeTheme',
-    'GardenCanvas',
-    'GardenWidget',
-    'GardenTabs',
-    'ConnectionPanel',
-    'InventoryPanel',
-    'BrainPanel',
-    'PetPanel',
-    'ShopPanel',
-    'JournalPanel',
-    'StatsPanel',
-    'ConsoleWidget',
-    'ConsoleRedirector',
+    "Carbon", "font", "font_families", "stylesheet",
+    "GardenCanvas", "Legend", "GardenTabs", "GardenPage",
+    "ShellHeader", "StatusFooter", "TABS",
+    "DashboardPage", "PetsPage", "InventoryPage", "InventoryPanel",
+    "ShopPage", "ShopPanel", "JournalPage", "JournalPanel", "SettingsPage",
+    "Snapshot", "ServerClock",
 ]
