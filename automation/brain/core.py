@@ -28,6 +28,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         self._original_pets = None  # ids of pets the account had when the bot started
         self._journal_pending = set()  # (species, variant) logged, not yet in server state
         self._camera_asked_at = 0.0
+        self._rejections_seen = 0.0  # time of the newest rejection already logged
         self._camera_accepted = False
         self._data_build = str(eco.GAME.get("build"))
         self._unbuyable = self._load_unbuyable()  # (shop, item key) the server rejected
@@ -89,6 +90,32 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         if save:
             from config import save_brain_settings
             save_brain_settings(updates)
+
+    @staticmethod
+    def _describe_command(cmd: Dict[str, Any]) -> str:
+        kind = cmd.get("type", "command")
+        if kind == "PurchaseShopItem":
+            item = cmd.get("item") or {}
+            name = item.get("species") or item.get("eggId") or item.get("toolId") or item.get("decorId") or "item"
+            noun = {"Seed": " seed", "Egg": "", "Tool": "", "Decor": ""}.get(item.get("itemType"), "")
+            return f"buy {name}{noun}"
+        if kind == "HarvestCrop":
+            return f"harvest tile {cmd.get('slot')}"
+        if kind == "PlantSeed":
+            return f"plant {cmd.get('species')} on tile {cmd.get('slot')}"
+        if kind == "FeedPet":
+            return "feed a pet"
+        if kind == "LogItem":
+            return "log a Journal entry"
+        return kind
+
+    def _log_rejections(self):
+        """Every server rejection becomes a readable Activity line (what + why)."""
+        for r in list(getattr(self.client, "rejection_log", []) or []):
+            if r["t"] <= self._rejections_seen:
+                continue
+            self._rejections_seen = r["t"]
+            self._log(f"rejected by server: {self._describe_command(r['command'])} ({r['code']})")
 
     def request(self, action: str):
         """Queue a one-off action from the UI: "sell" or "shop"."""
@@ -256,6 +283,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
                 still.add((tile, idx))
         self._pending_harvest = still
 
+        self._log_rejections()
         try:
             self.last_plan = self._summarize(s)
         except Exception:

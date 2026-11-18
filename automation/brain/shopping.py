@@ -46,6 +46,9 @@ class ShoppingMixin:
                     continue
                 if (shop_key, key) in self._unbuyable or (shop_key, restock) in self._bought_restocks:
                     continue
+                if (shop_key == "seed" and eco.CROPS.get(key, {}).get("webUnavailable")) or (
+                        shop_key == "egg" and eco.EGGS.get(key, {}).get("webUnavailable")):
+                    continue  # not sold to web clients; the server would reject it
                 if shop_key == "seed":
                     price = eco.CROPS.get(key, {}).get("seedPrice", 0)
                     affordable = int((coins - self.min_coins) // price) if price else left
@@ -128,6 +131,10 @@ class ShoppingMixin:
                     )
                     total += 1
                     await asyncio.sleep(random.uniform(0.25, 0.75))
+                    self._learn_rejections()
+                    key = item.get("species") or item.get("eggId") or item.get("toolId") or item.get("decorId")
+                    if (shop_key, key) in self._unbuyable:
+                        break  # refused: don't keep trying it this trip
                 await asyncio.sleep(random.uniform(0.3, 0.9))
             await self._send({"scopePath": SCOPE, "type": "SetPlayerInteraction", "interaction": None})
             await asyncio.sleep(random.uniform(0.4, 1.0))

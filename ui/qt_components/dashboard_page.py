@@ -290,7 +290,7 @@ class DashboardPage(QWidget):
                           f"Harvest and sell queued, about {short_number(stamped_value)}", "next"))
         if rejected:
             items.append(("warn", f"{full_number(rejected)} command{'s' if rejected != 1 else ''} rejected",
-                          "The server refused some actions; the terminal log has the reasons", ""))
+                          "The server refused some actions; see Activity for what and why", ""))
         if snap.brain is not None and snap.plan and snap.plan.get("granters_working") is False:
             items.append(("warn", "Granters not working",
                           "No fed Gold or Rainbow pet on the team, so valuable crops are harvested unstamped", ""))

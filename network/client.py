@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import random
+import time
 import re
 from urllib.parse import quote
 import traceback
@@ -75,6 +76,7 @@ class MagicGardenClient:
         self.session_coins_earned = 0
         self.command_ok = 0
         self.command_rejected = 0
+        self.rejection_log: List[Dict[str, Any]] = []  # recent rejections: time, what, why
 
         # Connection lifecycle management
         self._connected = asyncio.Event()
@@ -549,6 +551,9 @@ class MagicGardenClient:
                     if result.get("ok") is False:
                         self.command_rejected += 1
                         cmd = self._sent_commands.get(result.get("requestId"))
+                        self.rejection_log.append({"t": time.time(), "command": cmd or {},
+                                                   "code": result.get("code") or "rejected"})
+                        del self.rejection_log[:-50]
                         if cmd:
                             self.rejected_commands.append(cmd)
                             print(f"Server rejected {cmd.get('type')}: {result.get('code')}")

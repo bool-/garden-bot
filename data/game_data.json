@@ -221,7 +221,8 @@
    "rarity": "Legendary",
    "harvestType": "Multiple",
    "baseSellPrice": 1750,
-   "maxSizeMultiplier": 1.7
+   "maxSizeMultiplier": 1.7,
+   "webUnavailable": true
   },
   "Leek": {
    "seedPrice": 15000,
@@ -349,7 +350,8 @@
    "rarity": "Mythic",
    "harvestType": "Multiple",
    "baseSellPrice": 50000,
-   "maxSizeMultiplier": 2
+   "maxSizeMultiplier": 2,
+   "webUnavailable": true
   },
   "Poinsettia": {
    "seedPrice": 900000,
@@ -391,7 +393,8 @@
    "rarity": "Divine",
    "harvestType": "Multiple",
    "baseSellPrice": 50000,
-   "maxSizeMultiplier": 3
+   "maxSizeMultiplier": 3,
+   "webUnavailable": true
   },
   "PassionFruit": {
    "seedPrice": 2750000,
@@ -419,7 +422,8 @@
    "rarity": "Divine",
    "harvestType": "Multiple",
    "baseSellPrice": 50000,
-   "maxSizeMultiplier": 2
+   "maxSizeMultiplier": 2,
+   "webUnavailable": true
   },
   "Sunflower": {
    "seedPrice": 100000000,
@@ -1849,7 +1853,7 @@
    }
   }
  },
- "build": "2071",
- "extractedAt": 1794977769,
+ "build": "2078",
+ "extractedAt": 1794982411,
  "_source": "Extracted automatically from the magicgarden.gg web client by automation/gamedata.py. Do not hand-edit; it is rewritten on every new build."
 }

@@ -115,6 +115,9 @@ def extract(sources: Dict[str, str]) -> dict:
         secs = f(r"secondsToMature:([\d.e]+)")
         if secs:
             crop["secondsToMature"] = _num(secs)
+        surfaces = f(r"unavailableSurfaces:\[([^\]]*)\]")
+        if surfaces and "web" in surfaces:
+            crop["webUnavailable"] = True  # the web client can't buy its seed (server rejects it)
         crops[m.group(1)] = crop
 
     pets = {}
@@ -153,6 +156,10 @@ def extract(sources: Dict[str, str]) -> dict:
         allsrc,
     ):
         eggs[m.group(1)] = {"price": _num(m.group(2)), "hatchS": _num(m.group(3)), "weights": _weights(m.group(4))}
+        seg = allsrc[m.start(): m.start() + 600]
+        surf = re.search(r"unavailableSurfaces:\[([^\]]*)\]", seg)
+        if surf and "web" in surf.group(1):
+            eggs[m.group(1)]["webUnavailable"] = True
 
     abilities = {}
     for m in re.finditer(
