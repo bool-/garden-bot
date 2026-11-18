@@ -5,6 +5,8 @@ services:
     build: .
     container_name: garden-bot
     restart: unless-stopped
+    # Run as the host user so files written to ./state stay yours (override with UID/GID).
+    user: "${UID:-1000}:${GID:-1000}"
     # Host networking so the control API can bind the Tailscale address only.
     network_mode: host
     volumes:
