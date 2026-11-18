@@ -50,6 +50,7 @@ class GameState:
         self._pet_positions_synced: bool = False
         self._statistics = Statistics()
         self._extra: Dict[str, Any] = {}  # For runtime-added keys like room_id_override
+        self._revision = 0  # bumped on every state change; lets readers skip work when nothing moved
 
     # Player info methods
     def get_player_id(self) -> Optional[str]:
@@ -87,6 +88,18 @@ class GameState:
         """Sets the full state (makes a deep copy internally)"""
         with self._lock:
             self._full_state = deepcopy(state)
+            self._revision += 1
+
+    def get_revision(self) -> int:
+        """Changes whenever the game state or our position changes."""
+        with self._lock:
+            return self._revision
+
+    def read_full_state(self, reader_fn):
+        """Run reader_fn(full_state) under the lock WITHOUT copying (cheap
+        serialisation). reader_fn must not keep or mutate the reference."""
+        with self._lock:
+            return reader_fn(self._full_state)
 
     def get_full_state_unsafe(self) -> Optional[Dict[str, Any]]:
         """Returns the actual full state reference (caller must hold lock or know what they're doing)"""
@@ -101,6 +114,7 @@ class GameState:
         with self._lock:
             if self._full_state:
                 updater_fn(self._full_state)
+                self._revision += 1
 
     # Player position methods
     def get_player_position(self) -> Dict[str, int]:
@@ -109,7 +123,9 @@ class GameState:
 
     def set_player_position(self, x: int, y: int):
         with self._lock:
-            self._player_position = {"x": x, "y": y}
+            if self._player_position.get("x") != x or self._player_position.get("y") != y:
+                self._player_position = {"x": x, "y": y}
+                self._revision += 1
 
     # User slot index methods
     def get_user_slot_index(self) -> Optional[int]:

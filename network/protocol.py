@@ -6,6 +6,7 @@ and message processing that updates GameState.
 """
 
 import json
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 from copy import deepcopy
@@ -145,29 +146,43 @@ def apply_json_patch(obj, patch):
 
 # ========== Message Logging ==========
 
+# Message log. "commands" (default) keeps what we send and the server's
+# verdicts; "all" adds every game frame (debugging only: ~1 write/second);
+# "off" writes nothing. One compact JSON line per entry, file capped.
+LOG_MODE = "commands"
+LOG_MAX_BYTES = 5 * 1024 * 1024
+_NOISY = ("(RoomFrame)", "(QuinoaPlayerTimelineBatch)", "(QuinoaPlayerTimelineSnapshot)",
+          "(Config)", "(Ping)", "(Pong)", "(PartialState)")
+
+
+def set_log_mode(mode: str):
+    global LOG_MODE
+    LOG_MODE = mode if mode in ("off", "commands", "all") else "commands"
+
+
 def log_message_to_file(direction: str, message, timestamp=None):
-    """Log all messages to file"""
+    """Append one compact line to the message log (see LOG_MODE)."""
+    if LOG_MODE == "off":
+        return
+    if LOG_MODE == "commands":
+        if direction.startswith("RECEIVED") and direction.endswith(_NOISY):
+            return
+        if direction == "SENT" and isinstance(message, str) and message.startswith("pong"):
+            return
+        if direction == "SENT" and isinstance(message, dict) and message.get("type") == "PlayerPosition":
+            return
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
     try:
+        body = message if isinstance(message, str) else json.dumps(message, separators=(",", ":"))
+        try:
+            if os.path.getsize(MESSAGE_LOG_FILE) > LOG_MAX_BYTES:
+                os.replace(MESSAGE_LOG_FILE, MESSAGE_LOG_FILE + ".1")
+        except OSError:
+            pass
         with open(MESSAGE_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*80}\n")
-            f.write(f"[{timestamp}] {direction}\n")
-            f.write(f"{'='*80}\n")
-            if isinstance(message, str):
-                # Try to parse as JSON, but if it fails, log as raw text
-                try:
-                    parsed = json.loads(message)
-                    f.write(json.dumps(parsed, indent=2))
-                except json.JSONDecodeError:
-                    # Not JSON - log as plain text
-                    f.write(message)
-            else:
-                f.write(json.dumps(message, indent=2))
-            f.write("\n")
+            f.write(f"[{timestamp}] {direction} {body}" + chr(10))
     except Exception as e:
-        # Only suppress file I/O errors, not JSON parsing errors
         print(f"Warning: Failed to log message to file: {e}")
 
 

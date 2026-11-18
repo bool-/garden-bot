@@ -89,7 +89,9 @@ class MagicGardenGUI(QMainWindow):
 
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(500)
+        self.update_timer.start(1000)
+        self._last_key = None
+        self._last_full = 0.0
 
     def _fit_to_screen(self):
         """Open at the designed 1440x900 when it fits, otherwise as large as
@@ -170,7 +172,27 @@ class MagicGardenGUI(QMainWindow):
         self._flash[btn] = time.time() + 2.0
 
     # ------------------------------------------------------------------ update
+    def _change_key(self):
+        """Fingerprint of what the pages show; unchanged -> skip the rebuild."""
+        brain = self.client_holder.get("brain")
+        client = self.client_holder.get("client")
+        rev = self.game_state.get_revision() if hasattr(self.game_state, "get_revision") else time.time()
+        b = (getattr(brain, "paused", None), getattr(brain, "action", None),
+             len(getattr(brain, "events", ()) or ())) if brain is not None else None
+        c = (getattr(client, "is_connected", None), getattr(client, "command_ok", None)) if client else None
+        return (rev, b, c, self.pages.currentIndex())
+
     def update_ui(self):
+        remote = self.client_holder.get("remote")
+        if remote is not None:
+            remote.fast = self.isActiveWindow() and not self.isMinimized()
+        if self.isMinimized():
+            return  # nothing to draw
+        key = self._change_key()
+        now = time.time()
+        if key == self._last_key and now - self._last_full < 5.0:
+            return  # nothing changed; clocks catch up on the 5s refresh
+        self._last_key, self._last_full = key, now
         try:
             snap = Snapshot(self.game_state, self.client_holder, self.clock)
         except Exception as e:  # a half-applied patch should never kill the UI

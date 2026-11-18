@@ -68,6 +68,8 @@ class BotConfig:
     pet_food: PetFoodConfig
     reconnection: ReconnectionConfig
     brain: Dict[str, Any] = None  # automation/brain.py settings; enabled -> replaces the separate tasks
+    message_log: str = "commands"  # messages.log: off | commands | all
+    remote: Dict[str, Any] = None  # control API: {bind, port, token}
 
 
 def get_default_shop_config():
@@ -414,6 +416,8 @@ def load_config() -> BotConfig:
         pet_food=pet_food_config_obj,
         reconnection=reconnection_config_obj,
         brain=config.get("brain") or {},
+        message_log=str(config.get("message_log", "commands")),
+        remote=config.get("remote") or {},
     )
 
 

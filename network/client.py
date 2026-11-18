@@ -6,6 +6,7 @@ message sending/receiving, and running automation tasks.
 """
 
 import asyncio
+import contextlib
 import json
 import random
 import re
@@ -64,6 +65,9 @@ class MagicGardenClient:
         # One body: harvest walks, shop trips and pet feeding take turns.
         self.body_lock = asyncio.Lock()
 
+        # One shared HTTP session (connection reuse) for auth and page loads.
+        self._http: Optional[aiohttp.ClientSession] = None
+
         # requestId -> inner command, and the commands the server rejected.
         self._sent_commands: Dict[str, Dict[str, Any]] = {}
         self.rejected_commands: List[Dict[str, Any]] = []
@@ -96,6 +100,20 @@ class MagicGardenClient:
         print("CONNECTION LOST - Automation tasks will pause...")
         print("!" * 60 + "\n")
 
+    @contextlib.asynccontextmanager
+    async def _session(self):
+        """Yield the shared HTTP session, creating it on first use."""
+        if self._http is None or self._http.closed:
+            self._http = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(limit=4, ttl_dns_cache=600),
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+        yield self._http
+
+    async def close_http(self):
+        if self._http is not None and not self._http.closed:
+            await self._http.close()
+
     def _http_headers(self, room_id: Optional[str] = None) -> Dict[str, str]:
         headers = {
             "accept": "*/*",
@@ -114,7 +132,7 @@ class MagicGardenClient:
         are about to join. Falls back to the last known build on failure."""
         room = room or self.config.last_room or "MG1"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._session() as session:
                 async with session.get(
                     f"https://magicgarden.gg/r/{room}",
                     headers={"user-agent": USER_AGENT, "accept": "text/html"},
@@ -142,7 +160,7 @@ class MagicGardenClient:
                 await r.read()
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._session() as session:
                 await asyncio.gather(*[one(session, p) for p in paths], return_exceptions=True)
         except Exception:
             pass
@@ -172,7 +190,7 @@ class MagicGardenClient:
         payload = {"provider": "maybe-existing-jwt"}
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._session() as session:
                 async with session.post(auth_url, json=payload, headers=headers) as response:
                     if response.status == 200:
                         data = await response.json()
