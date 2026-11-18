@@ -105,6 +105,8 @@ class RemoteServer:
             return web.json_response({"error": "brain disabled"}, status=409)
         if "paused" in body:
             self.brain.paused = bool(body["paused"])
+        if isinstance(body.get("unlock"), list):
+            self.brain.request_unlock(body["unlock"])
         if body.get("request") in ("sell", "shop"):
             self.brain.request(body["request"])
         if isinstance(body.get("settings"), dict):

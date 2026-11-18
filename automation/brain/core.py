@@ -124,10 +124,28 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         if action in ("sell", "shop"):
             self.requests.append(action)
 
+    def request_unlock(self, item_ids):
+        """Queue unlocking items (the in-game lock that keeps them from being
+        sold or fed). Only items that are currently locked get toggled."""
+        ids = [str(i) for i in item_ids or [] if i]
+        if ids:
+            self.requests.append(("unlock", ids))
+
     async def _handle_requests(self, s) -> bool:
         if not self.requests:
             return False
         action = self.requests.popleft()
+        if isinstance(action, tuple) and action[0] == "unlock":
+            self.action = "unlocking items (requested)"
+            done = 0
+            for item_id in action[1]:
+                if item_id in s["locked"]:  # ToggleLockItem flips: never lock by mistake
+                    await self.client.send_command({"type": "ToggleLockItem", "itemId": item_id})
+                    s["locked"].discard(item_id)
+                    done += 1
+                    await asyncio.sleep(random.uniform(0.4, 0.9))
+            self._log(f"unlocked {done} item(s)" if done else "unlock: those items weren't locked")
+            return True
         if action == "sell":
             self.action = "selling (requested)"
             if not await self.sell_if_needed(s, force=True):
