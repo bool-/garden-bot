@@ -5,11 +5,13 @@ Handles automatic purchasing of configured items from shops.
 """
 
 import asyncio
+import random
 from copy import deepcopy
 from typing import Dict, Any
 
 from game_state import GameState
 from config import ShopConfig
+from automation.movement import go_to_shop, go_home
 
 
 async def check_and_buy_from_shop(
@@ -61,6 +63,16 @@ async def check_and_buy_from_shop(
     items_bought = 0
     total_items_in_stock = 0
 
+    # What we already bought this restock (the server rejects buying past it).
+    purchases_state = slot_data.get("shopPurchases") or {}
+
+    def bought_this_restock(shop_key, item_key):
+        shop = shops_data.get(shop_key) or {}
+        mine = purchases_state.get(shop_key) or {}
+        if not shop.get("restockId") or mine.get("restockId") != shop.get("restockId"):
+            return 0
+        return int((mine.get("purchases") or {}).get(item_key, 0))
+
     # Check seed shop
     seed_shop = shops_data.get("seed", {})
     seed_inventory = seed_shop.get("inventory", [])
@@ -73,7 +85,7 @@ async def check_and_buy_from_shop(
                 continue
 
             species = item.get("species")
-            stock = item.get("initialStock", 0)
+            stock = item.get("initialStock", 0) - bought_this_restock("seed", species)
 
             if stock > 0:
                 total_items_in_stock += 1
@@ -101,7 +113,7 @@ async def check_and_buy_from_shop(
                 continue
 
             egg_id = item.get("eggId")
-            stock = item.get("initialStock", 0)
+            stock = item.get("initialStock", 0) - bought_this_restock("egg", egg_id)
 
             if stock > 0:
                 total_items_in_stock += 1
@@ -115,6 +127,20 @@ async def check_and_buy_from_shop(
                         print(f"   {egg_id} (Egg) - egg buying disabled (Stock: {stock})")
                     else:
                         print(f"   {egg_id} (Egg) - not in config (Stock: {stock})")
+
+    if not seeds_to_buy and not eggs_to_buy:
+        if total_items_in_stock == 0:
+            print("   All shops are out of stock")
+        else:
+            print(f"   Found {total_items_in_stock} items in stock, but none match config")
+        return
+
+    # Press "Shop" (teleport to the market) and open the stall, like a player.
+    if not await go_to_shop(client, game_state):
+        return
+    if seeds_to_buy:
+        await client.send({"scopePath": ["Room", "Quinoa"], "type": "SetPlayerInteraction", "interaction": "seed"})
+        await asyncio.sleep(random.uniform(0.8, 1.8))
 
     # Buy all configured seeds
     for seed_item in seeds_to_buy:
@@ -138,12 +164,15 @@ async def check_and_buy_from_shop(
                     )
                     break
 
-            buy_message = {
-                "type": "PurchaseSeed",
-                "species": species,
-                "scopePath": ["Room", "Quinoa"],
-            }
-            await client.send(buy_message)
+            # v2036: coin purchases go through PurchaseShopItem inside a
+            # QuinoaCommand. shop is the shop key ("seed"), viewMode "grid"
+            # matches the real client's shop UI.
+            await client.send_command({
+                "type": "PurchaseShopItem",
+                "shop": "seed",
+                "viewMode": "grid",
+                "item": {"itemType": "Seed", "species": species},
+            })
 
             # Optimistically update shop count in game_state
             def update_seed_stock(full_state):
@@ -171,12 +200,16 @@ async def check_and_buy_from_shop(
 
             purchased_count += 1
             items_bought += 1
-            await asyncio.sleep(0.1)  # Small delay between purchases
+            await asyncio.sleep(random.uniform(0.35, 1.0))  # one click per purchase
 
         if purchased_count == stock:
             print(f"   Bought {stock}x {species} seeds")
         elif purchased_count > 0:
             print(f"   Bought {purchased_count}x {species} seeds (stopped early)")
+
+    if eggs_to_buy:
+        await client.send({"scopePath": ["Room", "Quinoa"], "type": "SetPlayerInteraction", "interaction": "egg"})
+        await asyncio.sleep(random.uniform(0.8, 1.8))
 
     # Buy all configured eggs
     for egg_item in eggs_to_buy:
@@ -200,12 +233,12 @@ async def check_and_buy_from_shop(
                     )
                     break
 
-            buy_message = {
-                "type": "PurchaseEgg",
-                "eggId": egg_id,
-                "scopePath": ["Room", "Quinoa"],
-            }
-            await client.send(buy_message)
+            await client.send_command({
+                "type": "PurchaseShopItem",
+                "shop": "egg",
+                "viewMode": "grid",
+                "item": {"itemType": "Egg", "eggId": egg_id},
+            })
 
             # Optimistically update shop count in game_state
             def update_egg_stock(full_state):
@@ -233,12 +266,17 @@ async def check_and_buy_from_shop(
 
             purchased_count += 1
             items_bought += 1
-            await asyncio.sleep(0.1)  # Small delay between purchases
+            await asyncio.sleep(random.uniform(0.35, 1.0))  # one click per purchase
 
         if purchased_count == stock:
             print(f"   Bought {stock}x {egg_id}")
         elif purchased_count > 0:
             print(f"   Bought {purchased_count}x {egg_id} (stopped early)")
+
+    # Close the shop and press "Garden" to go home.
+    await asyncio.sleep(random.uniform(0.5, 1.2))
+    await client.send({"scopePath": ["Room", "Quinoa"], "type": "SetPlayerInteraction", "interaction": None})
+    await go_home(client, game_state)
 
     # Summary
     if total_items_in_stock == 0:
@@ -271,7 +309,8 @@ async def run_shop_buyer(client, game_state: GameState, config: ShopConfig):
             await asyncio.sleep(interval)
 
             try:
-                await check_and_buy_from_shop(client, game_state, config)
+                async with client.body_lock:
+                    await check_and_buy_from_shop(client, game_state, config)
             except Exception as e:
                 print(f"Error in shop buying task: {e}")
                 # Continue on errors

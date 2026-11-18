@@ -1,0 +1,12 @@
+.git
+__pycache__
+*.pyc
+bot_config.json
+bot_config.json.tmp
+bot_state.json
+messages.log*
+*.out
+state/
+ui/
+magic_garden_bot.ico
+game-files/

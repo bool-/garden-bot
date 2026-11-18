@@ -6,6 +6,7 @@ and message processing that updates GameState.
 """
 
 import json
+import os
 from datetime import datetime
 from typing import Dict, Any, Optional
 from copy import deepcopy
@@ -145,29 +146,43 @@ def apply_json_patch(obj, patch):
 
 # ========== Message Logging ==========
 
+# Message log. "commands" (default) keeps what we send and the server's
+# verdicts; "all" adds every game frame (debugging only: ~1 write/second);
+# "off" writes nothing. One compact JSON line per entry, file capped.
+LOG_MODE = "commands"
+LOG_MAX_BYTES = 5 * 1024 * 1024
+_NOISY = ("(RoomFrame)", "(QuinoaPlayerTimelineBatch)", "(QuinoaPlayerTimelineSnapshot)",
+          "(Config)", "(Ping)", "(Pong)", "(PartialState)")
+
+
+def set_log_mode(mode: str):
+    global LOG_MODE
+    LOG_MODE = mode if mode in ("off", "commands", "all") else "commands"
+
+
 def log_message_to_file(direction: str, message, timestamp=None):
-    """Log all messages to file"""
+    """Append one compact line to the message log (see LOG_MODE)."""
+    if LOG_MODE == "off":
+        return
+    if LOG_MODE == "commands":
+        if direction.startswith("RECEIVED") and direction.endswith(_NOISY):
+            return
+        if direction == "SENT" and isinstance(message, str) and message.startswith("pong"):
+            return
+        if direction == "SENT" and isinstance(message, dict) and message.get("type") == "PlayerPosition":
+            return
     if timestamp is None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-
     try:
+        body = message if isinstance(message, str) else json.dumps(message, separators=(",", ":"))
+        try:
+            if os.path.getsize(MESSAGE_LOG_FILE) > LOG_MAX_BYTES:
+                os.replace(MESSAGE_LOG_FILE, MESSAGE_LOG_FILE + ".1")
+        except OSError:
+            pass
         with open(MESSAGE_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*80}\n")
-            f.write(f"[{timestamp}] {direction}\n")
-            f.write(f"{'='*80}\n")
-            if isinstance(message, str):
-                # Try to parse as JSON, but if it fails, log as raw text
-                try:
-                    parsed = json.loads(message)
-                    f.write(json.dumps(parsed, indent=2))
-                except json.JSONDecodeError:
-                    # Not JSON - log as plain text
-                    f.write(message)
-            else:
-                f.write(json.dumps(message, indent=2))
-            f.write("\n")
+            f.write(f"[{timestamp}] {direction} {body}" + chr(10))
     except Exception as e:
-        # Only suppress file I/O errors, not JSON parsing errors
         print(f"Warning: Failed to log message to file: {e}")
 
 
@@ -228,7 +243,7 @@ def process_welcome_message(data: Dict[str, Any], game_state: GameState) -> Opti
     our_slot_found = False
     for slot_idx, slot in enumerate(user_slots):
         if slot:
-            player_id = slot.get("playerId")
+            player_id = (slot.get("userId") or slot.get("playerId"))
             player_name = "Unknown"
 
             # Get player name from room data
@@ -319,6 +334,52 @@ def process_partial_state_message(data: Dict[str, Any], game_state: GameState):
     game_state.refresh_player_metadata()
 
 
+def process_room_frame_message(data: Dict[str, Any], game_state: GameState):
+    """Process RoomFrame message by applying its nested JSON patches.
+
+    The current server (v2036+) streams incremental state as ``RoomFrame``
+    messages instead of the older ``PartialState`` messages. The patch list is
+    nested one level deeper, under ``state.patches``::
+
+        {"type": "RoomFrame",
+         "publishedAtServerMs": ...,
+         "state": {"patches": [ ... RFC6902 ops ... ]},
+         "executedCommandSequence": ...}
+
+    Args:
+        data: RoomFrame message data
+        game_state: Game state to update
+    """
+    log_message_to_file("RECEIVED (RoomFrame)", data)
+
+    # Need full state (Welcome) before patches can be applied.
+    if not game_state.get_full_state_unsafe():
+        print("WARNING: Received RoomFrame before Welcome message")
+        return
+
+    state = data.get("state")
+    if not isinstance(state, dict):
+        # Some RoomFrames carry only metadata (e.g. heartbeats) with no state.
+        return
+
+    patches = state.get("patches")
+    if not patches:
+        return
+
+    for patch in patches:
+        try:
+            def apply_patch(fs):
+                apply_json_patch(fs, patch)
+            game_state.update_full_state_locked(apply_patch)
+            game_state.increment_stat("patches_applied")
+        except Exception as e:
+            print(f"ERROR applying RoomFrame patch: {e}")
+            print(f"Patch: {patch}")
+
+    game_state.set_stat("last_update", datetime.now().strftime("%H:%M:%S"))
+    game_state.refresh_player_metadata()
+
+
 def is_player_in_room_state(full_state: Dict[str, Any], player_id: str) -> bool:
     """Return True if the provided full_state shows the player in the room."""
     if not full_state or not player_id:
@@ -350,8 +411,23 @@ def process_message(message: str, game_state: GameState) -> Optional[Dict[str, A
 
         if msg_type == "Welcome":
             process_welcome_message(data, game_state)
+        elif msg_type == "RoomFrame":
+            process_room_frame_message(data, game_state)
         elif msg_type == "PartialState":
             process_partial_state_message(data, game_state)
+        elif msg_type == "QuinoaPlayerTimelineBatch":
+            me = game_state.get_player_id()
+            for entry in data.get("entries") or []:
+                to = entry.get("to")
+                if entry.get("playerId") == me and isinstance(to, dict) and "x" in to:
+                    game_state.set_player_position(to["x"], to["y"])
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
+        elif msg_type == "QuinoaPlayerTimelineSnapshot":
+            mine = (data.get("players") or {}).get(game_state.get_player_id()) or {}
+            tile = mine.get("tile")
+            if isinstance(tile, dict) and "x" in tile:
+                game_state.set_player_position(tile["x"], tile["y"])
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
         elif msg_type == "Ping":
             game_state.increment_stat("pings_received")
             log_message_to_file(f"RECEIVED ({msg_type})", data)

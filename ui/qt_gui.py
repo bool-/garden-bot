@@ -1,46 +1,64 @@
 """
-PyQt6 GUI for Magic Garden Bot
+PyQt6 GUI for Garden Bot, IBM Carbon (Gray 100) design.
 
-Modern, component-based UI with VS Code Dark+ theme.
+UI Shell header with section tabs and Sell / Shop / Pause, a stacked page
+area, and a 24px status bar. Keyboard: 1-7 switch tabs, Space pauses or
+resumes the brain, S sells now, B shops now. While the brain is paused (or
+disabled) W/A/S/D and the arrows move you and E plants or harvests the tile
+you stand on.
 """
 
-import sys
 import asyncio
-from typing import Optional, Dict, Any
+import time
+import uuid
+from typing import Any, Dict, Optional
 
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt6.QtGui import QIcon, QKeyEvent
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QLineEdit,
     QMainWindow,
-    QWidget,
+    QPlainTextEdit,
+    QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
-    QHBoxLayout,
-    QStatusBar,
-    QTabWidget,
-    QSplitter,
-    QSizePolicy,
+    QWidget,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QKeyEvent
 
-from game_state import GameState
 from config import HarvestConfig
-from utils.coordinates import convert_local_to_server_coords
+from game_state import GameState
 from .qt_components import (
-    VSCodeTheme,
-    GardenWidget,
-    GardenTabs,
-    ConnectionPanel,
-    InventoryPanel,
-    PetPanel,
-    ShopPanel,
-    JournalPanel,
-    StatsPanel,
-    ConsoleWidget,
-    ConsoleRedirector,
+    TABS,
+    DashboardPage,
+    GardenPage,
+    InventoryPage,
+    JournalPage,
+    PetsPage,
+    ServerClock,
+    SettingsPage,
+    ShellHeader,
+    ShopPage,
+    Snapshot,
+    StatusFooter,
+    font,
+    stylesheet,
 )
+
+TEXT_INPUTS = (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)
+MOVE_KEYS = {
+    Qt.Key.Key_W: (0, -1), Qt.Key.Key_Up: (0, -1),
+    Qt.Key.Key_S: (0, 1), Qt.Key.Key_Down: (0, 1),
+    Qt.Key.Key_A: (-1, 0), Qt.Key.Key_Left: (-1, 0),
+    Qt.Key.Key_D: (1, 0), Qt.Key.Key_Right: (1, 0),
+}
+TAB_KEYS = {getattr(Qt.Key, f"Key_{i + 1}"): i for i in range(len(TABS))}
 
 
 class MagicGardenGUI(QMainWindow):
-    """Main PyQt6 GUI window for Magic Garden Bot"""
+    """Main window"""
 
     def __init__(
         self,
@@ -51,440 +69,304 @@ class MagicGardenGUI(QMainWindow):
         super().__init__()
         self.game_state = game_state
         self.harvest_config = harvest_config
-        self.client_holder = client_holder or {}
-        self.theme = VSCodeTheme
+        self.client_holder = client_holder if client_holder is not None else {}
+        self.clock = ServerClock()
+        self.snap: Optional[Snapshot] = None
+        self._flash = {}  # button -> time a "Queued" hint expires
 
-        # Local player position tracking (visual coords: x=0-22, y=0-11)
-        self._local_player_pos = {"x": 11, "y": 11}
-
-        self.setWindowTitle("Magic Garden Bot")
-        self.resize(1400, 900)
-        self.setMinimumSize(1000, 700)  # Minimum size for usability
-
-        # Set application icon
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyle("Fusion")
+            app.setFont(font(14))
+        self.setWindowTitle("Garden Bot")
         self.setWindowIcon(QIcon("magic_garden_bot.ico"))
+        self._fit_to_screen()
+        self.setStyleSheet(stylesheet())
 
-        # Apply theme
-        self.setStyleSheet(self.theme.get_stylesheet())
-
-        # Setup UI
         self.setup_ui()
+        if app is not None:
+            app.installEventFilter(self)
 
-        # Redirect stdout
-        sys.stdout = ConsoleRedirector(self.console_widget.get_queue(), sys.stdout)
-
-        # Setup update timer
-        self.update_timer = QTimer()
+        self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(500)  # Update every 500ms
+        self.update_timer.start(1000)
+        self._last_key = None
+        self._last_full = 0.0
 
+    def _fit_to_screen(self):
+        """Open at the designed 1440x900 when it fits, otherwise as large as
+        the screen's free area allows (laptops), centred with the title bar
+        on screen so the window can always be dragged."""
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        width, height = 1440, 900
+        if avail is not None:
+            frame = 40  # room for the native title bar and borders
+            width = min(width, avail.width() - 16)
+            height = min(height, avail.height() - frame)
+        self.setMinimumSize(min(1200, width), min(760, height))
+        self.resize(width, height)
+        if avail is not None:
+            self.move(avail.x() + (avail.width() - width) // 2,
+                      avail.y() + max(0, (avail.height() - height - 32) // 2))
+
+    # ------------------------------------------------------------------ layout
     def setup_ui(self):
-        """Setup the user interface"""
-        # Central widget with splitter layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        lay = QVBoxLayout(central)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        self.header = ShellHeader()
+        self.header.tab_selected.connect(self.select_tab)
+        self.header.sell_clicked.connect(lambda: self.request("sell"))
+        self.header.shop_clicked.connect(lambda: self.request("shop"))
+        self.header.pause_clicked.connect(self.toggle_pause)
+        lay.addWidget(self.header)
 
-        # Create splitter for resizable panels
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(splitter)
-
-        # LEFT PANEL
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
-
-        # Connection panel (fixed size, doesn't expand)
-        self.connection_panel = ConnectionPanel(self.game_state)
-        self.connection_panel.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
-        )
-        left_layout.addWidget(self.connection_panel)
-
-        # Garden tabs widget (priority expansion)
-        self.garden_tabs = GardenTabs(self.game_state, self.harvest_config)
-        self.garden_tabs.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        left_layout.addWidget(self.garden_tabs, stretch=3)
-
-        # Console widget (secondary expansion)
-        self.console_widget = ConsoleWidget()
-        self.console_widget.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
-        )
-        left_layout.addWidget(self.console_widget, stretch=1)
-
-        splitter.addWidget(left_panel)
-
-        # RIGHT PANEL - Tabs (fixed size, doesn't expand)
-        right_panel = QTabWidget()
-        right_panel.setDocumentMode(True)
-        right_panel.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
-        )
-        right_panel.setFixedWidth(
-            486
-        )  # Fixed width - calculated for clean garden tile rendering
-
-        # Tab 1: Inventory
-        self.inventory_panel = InventoryPanel()
+        self.pages = QStackedWidget()
+        self.dashboard = DashboardPage(self.game_state, self.harvest_config)
+        self.garden_page = GardenPage(self.game_state, self.harvest_config)
+        self.garden_page.tabs.set_client_holder(self.client_holder)
+        self.garden_tabs = self.garden_page.tabs
+        self.pets_page = PetsPage()
+        self.inventory_panel = InventoryPage()
         self.inventory_panel.selection_made.connect(self._on_inventory_selection)
-        right_panel.addTab(self.inventory_panel, "🎒 Inventory")
-
-        # Tab 2: Pets
-        self.pet_panel = PetPanel()
-        right_panel.addTab(self.pet_panel, "🐾 Pets")
-
-        # Tab 3: Shop
-        self.shop_panel = ShopPanel()
+        self.shop_panel = ShopPage()
         self.shop_panel.set_client_holder(self.client_holder)
-        right_panel.addTab(self.shop_panel, "🛒 Shop")
+        self.journal_panel = JournalPage()
+        self.settings_page = SettingsPage()
+        for page in (self.dashboard, self.garden_page, self.pets_page, self.inventory_panel,
+                     self.shop_panel, self.journal_panel, self.settings_page):
+            self.pages.addWidget(page)
+        lay.addWidget(self.pages, 1)
 
-        # Tab 4: Journal
-        self.journal_panel = JournalPanel()
-        right_panel.addTab(self.journal_panel, "📖 Journal")
+        self.footer = StatusFooter()
+        lay.addWidget(self.footer)
 
-        # Tab 5: Stats
-        self.stats_panel = StatsPanel()
-        right_panel.addTab(self.stats_panel, "📊 Stats")
+    def select_tab(self, idx: int):
+        if 0 <= idx < self.pages.count():
+            self.pages.setCurrentIndex(idx)
+            self.header.select(idx)
+            self.update_ui()
 
-        splitter.addWidget(right_panel)
+    # ------------------------------------------------------------------ brain
+    def _brain(self):
+        return self.client_holder.get("brain")
 
-        # Set splitter sizes (calculated for clean garden tile rendering at min window size)
-        splitter.setSizes([914, 486])
+    def toggle_pause(self):
+        brain = self._brain()
+        if brain is None:
+            return
+        brain.paused = not bool(getattr(brain, "paused", False))
+        self.update_ui()
 
-        # Status bar
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
+    def request(self, action: str):
+        brain = self._brain()
+        if brain is None:
+            return
+        brain.request(action)
+        btn = self.header.sell if action == "sell" else self.header.shop
+        btn.set_hint("Queued")
+        self._flash[btn] = time.time() + 2.0
 
-    def extract_player_data(self):
-        """Extract player data from game state"""
-        return self.game_state.get_player_slot()
+    # ------------------------------------------------------------------ update
+    def _change_key(self):
+        """Fingerprint of what the pages show; unchanged -> skip the rebuild."""
+        brain = self.client_holder.get("brain")
+        client = self.client_holder.get("client")
+        rev = self.game_state.get_revision() if hasattr(self.game_state, "get_revision") else time.time()
+        b = (getattr(brain, "paused", None), getattr(brain, "action", None),
+             len(getattr(brain, "events", ()) or ())) if brain is not None else None
+        c = (getattr(client, "is_connected", None), getattr(client, "command_ok", None)) if client else None
+        return (rev, b, c, self.pages.currentIndex())
 
     def update_ui(self):
-        """Update UI with current game state"""
-        # Update connection panel
-        self.connection_panel.update_data()
-
-        # Update all garden tabs
-        self.garden_tabs.update_gardens()
-
-        # Extract player slot
-        player_slot = self.extract_player_data()
-
-        if not player_slot:
-            # Waiting for game state
+        remote = self.client_holder.get("remote")
+        if remote is not None:
+            remote.fast = self.isActiveWindow() and not self.isMinimized()
+        if self.isMinimized():
+            return  # nothing to draw
+        key = self._change_key()
+        now = time.time()
+        if key == self._last_key and now - self._last_full < 5.0:
+            return  # nothing changed; clocks catch up on the 5s refresh
+        self._last_key, self._last_full = key, now
+        try:
+            snap = Snapshot(self.game_state, self.client_holder, self.clock)
+        except Exception as e:  # a half-applied patch should never kill the UI
+            print(f"UI snapshot failed: {e!r}")
             return
-
-        # Get slot data
-        slot_data = player_slot.get("data", {})
-
-        # Update inventory panel
-        self.inventory_panel.update_data(slot_data)
-
-        # Update pet panel
-        self.pet_panel.update_data(slot_data)
-
-        # Update shop panel with quinoa-level data (shops are shared across all players)
-        full_state = self.game_state["full_state"]
-        if full_state:
-            child_state = full_state.get("child", {})
-            quinoa_data = child_state.get("data", {})
-            self.shop_panel.update_data(quinoa_data)
-        else:
-            self.shop_panel.update_data({})
-
-        # Update journal panel
-        self.journal_panel.update_data(slot_data)
-
-        # Update stats panel
-        self.stats_panel.update_data(slot_data)
+        self.snap = snap
+        self.header.set_state(snap.brain is not None, snap.paused)
+        now = time.time()
+        for btn, until in list(self._flash.items()):
+            if now >= until:
+                btn.set_hint("S" if btn is self.header.sell else "B")
+                del self._flash[btn]
+        self.footer.update_data(snap)
+        self.dashboard.sample(snap)
+        self.pages.currentWidget().update_data(snap)
 
     def _on_inventory_selection(self):
-        """Return focus to main window after inventory selection"""
         self.setFocus()
         self.activateWindow()
 
-    def _optimistic_move(self, new_x: int, new_y: int):
-        """Optimistically update player position in local state"""
-        def update(full_state):
-            player_id = self.game_state.get_player_id()
-            if not player_id:
-                return
-            child = full_state.get("child", {})
-            if child.get("scope") != "Quinoa":
-                return
-            user_slots = child.get("data", {}).get("userSlots", [])
-            for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
-                    slot["position"] = {"x": new_x, "y": new_y}
-                    break
-        self.game_state.update_full_state_locked(update)
-        # Trigger immediate UI update
-        self.garden_tabs.update_gardens()
+    # ------------------------------------------------------------------ keys
+    def eventFilter(self, obj: QObject, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.KeyPress and isinstance(obj, QWidget) and obj.window() is self:
+            if self.handle_key(event):
+                return True
+        return super().eventFilter(obj, event)
 
-    def _optimistic_harvest(self, tile_id: int):
-        """Optimistically remove plant from tile"""
-        def update(full_state):
-            player_id = self.game_state.get_player_id()
-            if not player_id:
-                return
-            child = full_state.get("child", {})
-            if child.get("scope") != "Quinoa":
-                return
-            user_slots = child.get("data", {}).get("userSlots", [])
-            for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
-                    tile_objects = slot.get("data", {}).get("garden", {}).get("tileObjects", {})
-                    tile_key = str(tile_id)
-                    if tile_key in tile_objects:
-                        del tile_objects[tile_key]
-                    break
-        self.game_state.update_full_state_locked(update)
-        self.garden_tabs.update_gardens()
+    def keyPressEvent(self, event: QKeyEvent):  # noqa: N802
+        if not self.handle_key(event):
+            super().keyPressEvent(event)
 
-    def _get_egg_count(self, inventory: dict, egg_id: str) -> int:
-        """Get count of specific egg type in inventory"""
-        items = inventory.get("items", [])
-        for item in items:
-            if item.get("itemType") == "Egg" and item.get("eggId") == egg_id:
-                return item.get("quantity", 0)
-        return 0
-
-    def _optimistic_plant(self, tile_id: int, species: str, is_egg: bool = False):
-        """Optimistically add plant/egg to tile"""
-        import time
-        def update(full_state):
-            player_id = self.game_state.get_player_id()
-            if not player_id:
-                return
-            child = full_state.get("child", {})
-            if child.get("scope") != "Quinoa":
-                return
-            user_slots = child.get("data", {}).get("userSlots", [])
-            for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
-                    tile_objects = slot.get("data", {}).get("garden", {}).get("tileObjects", {})
-                    if is_egg:
-                        # Add egg placeholder
-                        tile_objects[str(tile_id)] = {
-                            "objectType": "egg",
-                            "eggId": species,
-                            "maturedAt": int(time.time() * 1000) + 60000,  # 1 min placeholder
-                        }
-                    else:
-                        # Add plant placeholder
-                        tile_objects[str(tile_id)] = {
-                            "objectType": "plant",
-                            "slots": [{
-                                "species": species,
-                                "mutations": [],
-                                "endTime": int(time.time() * 1000) + 60000,  # 1 min placeholder
-                            }]
-                        }
-                    break
-        self.game_state.update_full_state_locked(update)
-        self.garden_tabs.update_gardens()
-
-    def _create_icon(self):
-        """Create a simple garden-themed icon"""
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.GlobalColor.transparent)
-
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        # Draw a simple plant/flower icon
-        # Stem
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(self.theme.GARDEN_READY))
-        painter.drawRect(28, 32, 8, 24)
-
-        # Flower petals (circle)
-        painter.setBrush(QColor(self.theme.GARDEN_GROWING))
-        painter.drawEllipse(16, 16, 32, 32)
-
-        # Center
-        painter.setBrush(QColor(self.theme.ACCENT_BLUE))
-        painter.drawEllipse(24, 24, 16, 16)
-
-        painter.end()
-        return QIcon(pixmap)
-
-    def keyPressEvent(self, event: QKeyEvent):
-        """Handle keyboard input for player movement and interaction"""
+    def handle_key(self, event: QKeyEvent) -> bool:
+        """Shortcuts; returns True when the key was used."""
+        focus = QApplication.focusWidget()
+        if isinstance(focus, TEXT_INPUTS) or (isinstance(focus, QComboBox) and focus.isEditable()):
+            return False
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods not in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier):
+            return False
         key = event.key()
+        brain = self._brain()
+        manual = brain is None or bool(getattr(brain, "paused", False))
+        if not event.isAutoRepeat():
+            if key in TAB_KEYS:
+                self.select_tab(TAB_KEYS[key])
+                return True
+            if key == Qt.Key.Key_Space:
+                self.toggle_pause()
+                return True
+            if key == Qt.Key.Key_B and brain is not None:
+                self.request("shop")
+                return True
+            if key == Qt.Key.Key_S and brain is not None and not manual:
+                self.request("sell")
+                return True
+        if manual and (key in MOVE_KEYS or key in (Qt.Key.Key_E, Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            self._manual_key(key)
+            return True
+        return False
 
-        # Check if client is available
+    # ------------------------------------------------------------------ manual play
+    def _manual_key(self, key):
         client = self.client_holder.get("client")
         loop = self.client_holder.get("loop")
-
-        if not client or not loop or not client.is_connected:
-            super().keyPressEvent(event)
+        if not client or not loop or not getattr(client, "is_connected", False):
             return
-
-        # Get current player position from game state
         player_slot = self.game_state.get_player_slot()
-        if not player_slot:
-            if key == Qt.Key.Key_Space:
-                print("Space pressed but no player_slot")
-            super().keyPressEvent(event)
+        pos = self.game_state.get_player_position()
+        if not player_slot or not pos or pos.get("x") is None or pos.get("y") is None:
+            print("Manual control: player position is unknown")
             return
-
-        current_pos = player_slot.get("position")
-        if not current_pos:
-            if key == Qt.Key.Key_Space:
-                print("Space pressed but no current_pos in player_slot")
-            super().keyPressEvent(event)
-            return
-
-        # WASD and Arrow key movement
-        movement = None
-        if key in (Qt.Key.Key_W, Qt.Key.Key_Up):
-            movement = (0, -1)  # Up
-        elif key in (Qt.Key.Key_S, Qt.Key.Key_Down):
-            movement = (0, 1)  # Down
-        elif key in (Qt.Key.Key_A, Qt.Key.Key_Left):
-            movement = (-1, 0)  # Left
-        elif key in (Qt.Key.Key_D, Qt.Key.Key_Right):
-            movement = (1, 0)  # Right
-        elif key == Qt.Key.Key_Space:
-            # Interact with tile at current position
-            print("Space pressed - calling interact")
+        if key in (Qt.Key.Key_E, Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._handle_interact(client, loop, player_slot)
             return
+        dx, dy = MOVE_KEYS[key]
+        new_x, new_y = pos["x"] + dx, pos["y"] + dy
+        self._optimistic_move(new_x, new_y)
+        message = {
+            "scopePath": ["Room", "Quinoa"],
+            "type": "PlayerPosition",
+            "position": {"x": new_x, "y": new_y},
+        }
+        asyncio.run_coroutine_threadsafe(client.send(message), loop)
 
-        if movement:
-            dx, dy = movement
-            new_x = current_pos["x"] + dx
-            new_y = current_pos["y"] + dy
+    def _refresh_gardens(self):
+        self.update_ui()
 
-            # Optimistic update - update local state immediately
-            self._optimistic_move(new_x, new_y)
+    def _optimistic_move(self, new_x: int, new_y: int):
+        self.game_state.set_player_position(new_x, new_y)
+        self._refresh_gardens()
 
-            # Send PlayerPosition message
-            message = {
-                "scopePath": ["Room", "Quinoa"],
-                "type": "PlayerPosition",
-                "position": {"x": new_x, "y": new_y},
-            }
+    def _optimistic_harvest(self, tile_id: int):
+        def update(full_state):
+            player_id = self.game_state.get_player_id()
+            child = full_state.get("child", {})
+            if not player_id or child.get("scope") != "Quinoa":
+                return
+            for slot in child.get("data", {}).get("userSlots", []):
+                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
+                    slot.get("data", {}).get("garden", {}).get("tileObjects", {}).pop(str(tile_id), None)
+                    break
+        self.game_state.update_full_state_locked(update)
+        self._refresh_gardens()
 
-            # Send via asyncio thread-safe
-            asyncio.run_coroutine_threadsafe(client.send(message), loop)
-            return
-
-        super().keyPressEvent(event)
+    def _optimistic_plant(self, tile_id: int, species: str, is_egg: bool = False):
+        def update(full_state):
+            player_id = self.game_state.get_player_id()
+            child = full_state.get("child", {})
+            if not player_id or child.get("scope") != "Quinoa":
+                return
+            for slot in child.get("data", {}).get("userSlots", []):
+                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
+                    tiles = slot.get("data", {}).get("garden", {}).get("tileObjects", {})
+                    now = int(time.time() * 1000)
+                    if is_egg:
+                        tiles[str(tile_id)] = {"objectType": "egg", "eggId": species, "maturedAt": now + 60000}
+                    else:
+                        tiles[str(tile_id)] = {"objectType": "plant", "species": species, "slots": [
+                            {"species": species, "mutations": [], "endTime": now + 60000}]}
+                    break
+        self.game_state.update_full_state_locked(update)
+        self._refresh_gardens()
 
     def _handle_interact(self, client, loop, player_slot):
-        """Handle Space key interaction - harvest or plant"""
-        slot_data = player_slot.get("data", {})
-        garden_data = slot_data.get("garden", {})
-        tile_objects = garden_data.get("tileObjects", {})
-        inventory = slot_data.get("inventory", {})
-
-        # Get player position and convert to tile ID
-        position = player_slot.get("position")
-        if not position:
-            print("No position found in player_slot")
-            return
-
-        # Convert server coords to local, then to tile ID
+        """E / Enter: harvest or hatch the tile you stand on, or plant the
+        seed or egg selected on the Inventory page."""
+        tile_objects = player_slot.get("data", {}).get("garden", {}).get("tileObjects", {})
+        position = self.game_state.get_player_position()
         slot_index = self.game_state.get_user_slot_index()
         if slot_index is None:
-            print("slot_index is None")
+            print("Manual control: garden slot unknown")
             return
-
         from utils.constants import SPAWN_POSITIONS
         if slot_index >= len(SPAWN_POSITIONS):
-            print(f"slot_index {slot_index} out of range")
+            print(f"Manual control: slot {slot_index} out of range")
             return
-
-        spawn_pos = SPAWN_POSITIONS[slot_index]
-        local_spawn = {"x": 11, "y": 11}
-
-        # Convert server position to local
-        local_x = local_spawn["x"] + (position["x"] - spawn_pos["x"])
-        local_y = local_spawn["y"] + (position["y"] - spawn_pos["y"])
-        print(f"Position: server=({position['x']},{position['y']}) local=({local_x},{local_y})")
-
-        # Convert local to tile ID (skip boardwalk)
-        # Visual row 0 and 11 are boardwalk, visual col 0, 11, 22 are boardwalk
-        # Tile row = visual_row - 1, tile col depends on which side of center
-        if local_y < 1 or local_y > 10:
-            print("Standing on boardwalk - can't interact")
+        spawn = SPAWN_POSITIONS[slot_index]
+        local_x = 11 + (position["x"] - spawn["x"])
+        local_y = 11 + (position["y"] - spawn["y"])
+        if local_y < 1 or local_y > 10 or local_x < 1 or local_x > 21 or local_x == 11:
+            print("Standing on the boardwalk: nothing to plant or harvest")
             return
-
-        if local_x < 1 or local_x > 21 or local_x == 11:
-            print("Standing on boardwalk - can't interact")
-            return
-
-        # Calculate tile ID
-        tile_row = local_y - 1  # 0-9 (10 rows of plantable tiles)
-        if local_x < 11:
-            tile_col = local_x - 1  # 0-9
-        else:
-            tile_col = local_x - 2  # 10-19
-
-        tile_id = tile_row * 20 + tile_col
-
-        # Check if tile has something
+        tile_col = local_x - 1 if local_x < 11 else local_x - 2
+        tile_id = (local_y - 1) * 20 + tile_col
         tile_obj = tile_objects.get(str(tile_id))
 
         if tile_obj:
             obj_type = tile_obj.get("objectType")
             if obj_type == "plant":
-                # Harvest the plant
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
-                    "type": "HarvestCrop",
-                    "slot": tile_id,
-                    "slotsIndex": 0,
-                }
+                # QuinoaCommand envelope; cropItemId is a client-generated UUID (v2036).
+                command = {"type": "HarvestCrop", "slot": tile_id, "slotsIndex": 0, "cropItemId": str(uuid.uuid4())}
                 print(f"Harvesting tile {tile_id}")
-                self._optimistic_harvest(tile_id)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
             elif obj_type == "egg":
-                # Hatch the egg
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
-                    "type": "HatchEgg",
-                    "slot": tile_id,
-                }
+                command = {"type": "HatchEgg", "slot": tile_id}
                 print(f"Hatching egg on tile {tile_id}")
-                self._optimistic_harvest(tile_id)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
             else:
-                print(f"Unknown object type on tile: {obj_type}")
-        else:
-            # Empty tile - try to plant seed or egg
-            selected_seed = self.inventory_panel.get_selected_seed()
-            selected_egg = self.inventory_panel.get_selected_egg()
+                print(f"Unknown object on tile {tile_id}: {obj_type}")
+                return
+            self._optimistic_harvest(tile_id)
+            asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
+            return
 
-            if selected_seed:
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
-                    "type": "PlantSeed",
-                    "slot": tile_id,
-                    "species": selected_seed,
-                }
-                print(f"Planting {selected_seed} on tile {tile_id}")
-                self._optimistic_plant(tile_id, selected_seed, is_egg=False)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
-            elif selected_egg:
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
-                    "type": "PlantEgg",
-                    "slot": tile_id,
-                    "eggId": selected_egg,
-                }
-                print(f"Planting egg {selected_egg} on tile {tile_id}")
-                self._optimistic_plant(tile_id, selected_egg, is_egg=True)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
-            else:
-                print("No seed or egg selected - click one in the Inventory tab first")
+        seed = self.inventory_panel.get_selected_seed()
+        egg = self.inventory_panel.get_selected_egg()
+        if seed:
+            command = {"type": "PlantSeed", "slot": tile_id, "species": seed}
+            print(f"Planting {seed} on tile {tile_id}")
+            self._optimistic_plant(tile_id, seed, is_egg=False)
+        elif egg:
+            # The old "PlantEgg" is "GrowEgg" now (slot + eggId), in a QuinoaCommand (v2036).
+            command = {"type": "GrowEgg", "slot": tile_id, "eggId": egg}
+            print(f"Planting egg {egg} on tile {tile_id}")
+            self._optimistic_plant(tile_id, egg, is_egg=True)
+        else:
+            print("No seed or egg selected: pick one on the Inventory page first")
+            return
+        asyncio.run_coroutine_threadsafe(client.send_command(command), loop)

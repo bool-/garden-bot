@@ -1,183 +1,135 @@
 """
-Garden Tabs Widget
-
-Tabbed interface for viewing multiple players' gardens.
+Garden page: every player's garden in the room, one Carbon tab per player
+(yours first), with a legend of live counts for the garden on screen.
 """
 
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QGroupBox, QLabel, QFrame
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
-from game_state import GameState
 from config import HarvestConfig
-from .garden_canvas import GardenCanvas
-from .theme import VSCodeTheme
+from game_state import GameState
+
+from .garden_canvas import GardenCanvas, Legend
+from .theme import Carbon as C
+from .widgets import FlatButton, Page, make_label, label_font, rule, set_text
 
 
 class GardenTabs(QWidget):
-    """Tabbed garden view widget for displaying multiple players' gardens"""
+    """Tabs of player gardens (keeps one canvas per player id)."""
 
     def __init__(self, game_state: GameState, harvest_config: Optional[HarvestConfig] = None):
         super().__init__()
         self.game_state = game_state
         self.harvest_config = harvest_config
-        self.theme = VSCodeTheme
+        self.client_holder = {}
+        self.canvases = {}  # player id -> canvas
+        self.buttons = {}  # player id -> tab button
+        self.order = []  # player ids, yours first
 
-        # Store canvas instances by player_id
-        self.canvases = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        bar = QWidget()
+        bar.setFixedHeight(40)
+        self.tab_row = QHBoxLayout(bar)
+        self.tab_row.setContentsMargins(0, 0, 0, 0)
+        self.tab_row.setSpacing(0)
+        self.tab_row.addStretch(1)
+        self.legend = Legend()
+        self.tab_row.addWidget(self.legend)
+        lay.addWidget(bar)
+        lay.addWidget(rule())
+        self.stack = QStackedWidget()
+        lay.addSpacing(C.S3)
+        lay.addWidget(self.stack, 1)
+        self.empty = make_label("Waiting for game state", label_font(), C.TEXT_HELPER)
+        self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stack.addWidget(self.empty)
 
-        # Main layout
-        main_layout = QVBoxLayout()
-        main_layout.setContentsMargins(0, 0, 0, 0)
+    def set_client_holder(self, client_holder):
+        self.client_holder = client_holder if client_holder is not None else {}
+        for canvas in self.canvases.values():
+            canvas.set_client_holder(self.client_holder)
 
-        # Group box
-        group = QGroupBox("🌻 Garden Views")
-        group_layout = QVBoxLayout()
-        group_layout.setContentsMargins(12, 16, 12, 12)
-        group_layout.setSpacing(8)
-
-        # Tab widget
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
-        group_layout.addWidget(self.tab_widget)
-
-        # Legend
-        legend_widget = self._create_legend()
-        group_layout.addWidget(legend_widget)
-
-        group.setLayout(group_layout)
-        main_layout.addWidget(group)
-        self.setLayout(main_layout)
-
-    def update_gardens(self):
-        """Update all garden tabs with latest data from all user slots"""
-        # Get raw user slots to preserve actual slot indices for coordinate conversion
-        full_state = self.game_state.get_full_state()
-        if not full_state:
-            self.tab_widget.clear()
-            self.canvases.clear()
+    def _select(self, pid):
+        canvas = self.canvases.get(pid)
+        if canvas is None:
             return
+        self.stack.setCurrentWidget(canvas)
+        for other, b in self.buttons.items():
+            b.set_selected(other == pid)
+        self.legend.set_counts(canvas.counts)
 
-        child_state = full_state.get("child", {})
-        if child_state.get("scope") != "Quinoa":
-            self.tab_widget.clear()
-            self.canvases.clear()
-            return
+    def current_canvas(self) -> Optional[GardenCanvas]:
+        w = self.stack.currentWidget()
+        return w if isinstance(w, GardenCanvas) else None
 
-        user_slots = child_state.get("data", {}).get("userSlots", [])
-        current_player_id = self.game_state.get_player_id()
-
-        if not user_slots:
-            self.tab_widget.clear()
-            self.canvases.clear()
-            return
-
-        # Track which player IDs we've seen
-        active_player_ids = set()
-
-        # Update or create tabs for each slot - now with correct slot indices
-        for slot_index, slot in enumerate(user_slots):
+    def update_gardens(self, snap=None):
+        """Sync tabs with the room's user slots (snap: model.Snapshot)."""
+        slots = snap.user_slots if snap is not None else []
+        me = snap.player_id if snap is not None else self.game_state.get_player_id()
+        seen = []
+        for idx, slot in enumerate(slots):
             if not slot:
                 continue
-            player_id = slot.get("playerId")
-            if not player_id:
+            pid = slot.get("userId") or slot.get("playerId")
+            if not pid:
                 continue
-
-            active_player_ids.add(player_id)
-
-            # Get player name
-            player_name = self.game_state.get_player_name_by_id(player_id)
-            if not player_name:
-                player_name = player_id
-
-            # Add "(You)" to current player's tab
-            is_current_player = (player_id == current_player_id)
-            tab_label = f"{player_name} (You)" if is_current_player else player_name
-
-            # Create or update canvas for this player
-            if player_id not in self.canvases:
-                # Create new canvas with slot index for coordinate conversion
-                canvas = GardenCanvas(self.game_state, self.harvest_config, slot_index=slot_index)
-                self.canvases[player_id] = canvas
-
-                # Add tab - current player's tab goes first
-                if is_current_player:
-                    self.tab_widget.insertTab(0, canvas, tab_label)
-                else:
-                    self.tab_widget.addTab(canvas, tab_label)
+            seen.append(pid)
+            name = self.game_state.get_player_name_by_id(pid) or str(pid)
+            label = f"{name} (you)" if pid == me else name
+            canvas = self.canvases.get(pid)
+            if canvas is None:
+                canvas = GardenCanvas(self.game_state, self.harvest_config, slot_index=idx, max_cell=48)
+                canvas.set_client_holder(self.client_holder)
+                self.canvases[pid] = canvas
+                self.stack.addWidget(canvas)
+                btn = FlatButton(label, hover=C.LAYER_HOVER_01, fg=C.TEXT_SECONDARY, sel_bg=C.LAYER_01,
+                                 sel_fg=C.TEXT_PRIMARY, marker="bottom")
+                btn.clicked.connect(lambda _=False, p=pid: self._select(p))
+                self.buttons[pid] = btn
             else:
-                # Update existing tab label in case name changed
-                canvas = self.canvases[player_id]
-                # Update slot index (in case player moved slots somehow)
-                canvas.slot_index = slot_index
-                for i in range(self.tab_widget.count()):
-                    if self.tab_widget.widget(i) == canvas:
-                        self.tab_widget.setTabText(i, tab_label)
-                        # Move current player's tab to first position if needed
-                        if is_current_player and i != 0:
-                            self.tab_widget.removeTab(i)
-                            self.tab_widget.insertTab(0, canvas, tab_label)
-                            self.tab_widget.setCurrentIndex(0)
-                        break
-
-            # Update canvas with slot data
+                canvas.slot_index = idx
+                self.buttons[pid].setText(label)
+            canvas.set_view(snap.now_ms, snap.hold_min, snap.food_crops if pid == me else set())
             canvas.set_player_slot(slot)
 
-        # Remove tabs for players who left
-        player_ids_to_remove = []
-        for player_id in self.canvases.keys():
-            if player_id not in active_player_ids:
-                player_ids_to_remove.append(player_id)
+        # yours first, then by slot order
+        order = sorted(seen, key=lambda p: (p != me, seen.index(p)))
+        if order != self.order:
+            for pid in self.order:
+                if pid in self.buttons:
+                    self.tab_row.removeWidget(self.buttons[pid])
+            for i, pid in enumerate(order):
+                self.tab_row.insertWidget(i, self.buttons[pid])
+            self.order = order
+        for pid in [p for p in self.canvases if p not in seen]:
+            canvas = self.canvases.pop(pid)
+            self.stack.removeWidget(canvas)
+            canvas.deleteLater()
+            self.buttons.pop(pid).deleteLater()
 
-        for player_id in player_ids_to_remove:
-            canvas = self.canvases[player_id]
-            # Find and remove the tab
-            for i in range(self.tab_widget.count()):
-                if self.tab_widget.widget(i) == canvas:
-                    self.tab_widget.removeTab(i)
-                    break
-            del self.canvases[player_id]
+        current = self.current_canvas()
+        if current is None and order:
+            self._select(order[0])
+        elif current is not None:
+            self.legend.set_counts(current.counts)
+        elif not order:
+            self.stack.setCurrentWidget(self.empty)
 
-    def _create_legend(self):
-        """Create the color legend"""
-        legend_widget = QWidget()
-        legend_widget.setMaximumHeight(35)
-        legend_layout = QHBoxLayout(legend_widget)
-        legend_layout.setContentsMargins(0, 5, 0, 5)
-        legend_layout.setSpacing(12)
 
-        legend_items = [
-            (self.theme.GARDEN_PLAYER, "You"),
-            (self.theme.GARDEN_READY, "Ready"),
-            (self.theme.GARDEN_GROWN, "Grown"),
-            (self.theme.GARDEN_GROWING, "Growing"),
-            (self.theme.GARDEN_EGG_READY, "Ready Egg"),
-            (self.theme.GARDEN_EGG_GROWING, "Growing Egg"),
-            (self.theme.GARDEN_PET, "Pet"),
-            (self.theme.GARDEN_EMPTY, "Empty"),
-        ]
+class GardenPage(Page):
+    def __init__(self, game_state: GameState, harvest_config=None):
+        super().__init__("Garden", "Your garden and every other garden in the room. Hover a tile for its crop, "
+                                   "mutations, value and what the bot will do with it.")
+        self.tabs = GardenTabs(game_state, harvest_config)
+        self.outer.addWidget(self.tabs, 1)
 
-        for color, label in legend_items:
-            item_layout = QHBoxLayout()
-            item_layout.setSpacing(4)
-
-            # Color square
-            color_widget = QFrame()
-            color_widget.setFixedSize(12, 12)
-            color_widget.setStyleSheet(
-                f"background-color: {color}; "
-                f"border: 1px solid {self.theme.BORDER};"
-            )
-
-            # Label
-            text_label = QLabel(label)
-            text_label.setStyleSheet(f"color: {self.theme.TEXT_SECONDARY}; font-size: 8pt;")
-
-            item_layout.addWidget(color_widget)
-            item_layout.addWidget(text_label)
-
-            legend_layout.addLayout(item_layout)
-
-        legend_layout.addStretch()
-        return legend_widget
+    def update_data(self, snap):
+        self.tabs.update_gardens(snap)
+        if snap.ready:
+            n = sum(1 for s in snap.user_slots if s)
+            set_text(self.helper_label, f"Room {snap.room_id or '-'}: {n} garden{'s' if n != 1 else ''}. "
+                     "Hover a tile for its crop, mutations, value and what the bot will do with it.")

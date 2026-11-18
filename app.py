@@ -9,6 +9,13 @@ import argparse
 import threading
 import sys
 
+# Windows consoles default to cp1252, which crashes on the status glyphs we print.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from config import load_config
 from game_state import GameState
 from network.client import MagicGardenClient
@@ -36,10 +43,59 @@ def parse_args():
         default="qt",
         help="Choose UI framework (default: qt)",
     )
+    parser.add_argument(
+        "--serve", action="store_true",
+        help="Also run the remote control API (bind/port/token from bot_config.json 'remote')",
+    )
+    parser.add_argument(
+        "--remote", type=str, metavar="URL",
+        help="Open only the window and control a bot running elsewhere, e.g. http://100.122.51.56:8765",
+    )
+    parser.add_argument("--token", type=str, help="Token for --remote (or GARDEN_BOT_TOKEN env var)")
     return parser.parse_args()
 
 
-async def run_bot(config, game_state, headless=False, client_holder=None):
+def remote_settings(config) -> dict:
+    """bind/port/token for the control API; creates and saves a token once."""
+    import json as _json
+    import secrets
+    from utils.constants import CONFIG_FILE
+
+    remote = dict(config.remote or {})
+    remote.setdefault("bind", "127.0.0.1")
+    remote.setdefault("port", 8765)
+    if not remote.get("token"):
+        remote["token"] = secrets.token_urlsafe(24)
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                raw = _json.load(f)
+            raw["remote"] = remote
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                _json.dump(raw, f, indent=2)
+            print(f"Created a remote API token in {CONFIG_FILE} (remote.token)")
+        except OSError as e:
+            print(f"Could not save the remote token: {e}")
+    return remote
+
+
+def run_remote_window(url: str, token: str):
+    """Window only: watch and steer a bot that runs somewhere else."""
+    from PyQt6.QtWidgets import QApplication
+    from ui.qt_gui import MagicGardenGUI
+    from ui.remote_source import RemoteBrain, RemoteClient, RemoteGameState, RemoteSource
+
+    source = RemoteSource(url, token)
+    holder = {"client": RemoteClient(source), "brain": RemoteBrain(source), "remote": source}
+    app = QApplication(sys.argv)
+    window = MagicGardenGUI(RemoteGameState(source), None, client_holder=holder)
+    window.setWindowTitle(f"Garden Bot (remote: {url})")
+    window.show()
+    code = app.exec()
+    source.stop()
+    sys.exit(code)
+
+
+async def run_bot(config, game_state, headless=False, client_holder=None, serve=False):
     """
     Run the bot (headless or with GUI).
 
@@ -56,6 +112,35 @@ async def run_bot(config, game_state, headless=False, client_holder=None):
     if client_holder is not None:
         client_holder["client"] = client
         client_holder["loop"] = asyncio.get_running_loop()
+
+    if (config.brain or {}).get("enabled"):
+        from automation import economy, gamedata
+        from automation.brain import Brain
+
+        # Keep the game tables in step with the live build before playing.
+        room = game_state.get("room_id_override") or config.last_room or "MG1"
+        await asyncio.to_thread(gamedata.ensure_current, room)
+        economy.reload()
+
+        print("Brain enabled: feeding, shopping, selling, harvesting and planting on one loop")
+        brain = Brain(client, game_state, config.brain)
+        if client_holder is not None:
+            client_holder["brain"] = brain
+        client.register_task(lambda: brain.run())
+        server = None
+        if serve:
+            from automation.remote import RemoteServer
+
+            remote = remote_settings(config)
+            server = RemoteServer(client, game_state, brain, remote["token"])
+            await server.start(remote["bind"], int(remote["port"]))
+        try:
+            await client.run()
+        finally:
+            if server:
+                await server.stop()
+            await client.close_http()
+        return
 
     # Register automation task factories (lambdas that create new task instances)
     client.register_task(
@@ -80,6 +165,16 @@ def main():
     """Application entry point."""
     args = parse_args()
 
+    if args.remote:
+        import os
+
+        token = args.token or os.environ.get("GARDEN_BOT_TOKEN", "")
+        if not token:
+            print("--remote needs --token or the GARDEN_BOT_TOKEN environment variable")
+            return
+        run_remote_window(args.remote, token)
+        return
+
     # Load config
     try:
         config = load_config()
@@ -87,6 +182,9 @@ def main():
         print(f"\nConfiguration error: {exc}")
         print("Update bot_config.json and restart the bot.")
         return
+
+    from network.protocol import set_log_mode
+    set_log_mode(config.message_log)
 
     # Create game state
     game_state = GameState()
@@ -99,7 +197,7 @@ def main():
     if args.headless:
         # Headless mode
         print("Running in headless mode (no GUI)")
-        asyncio.run(run_bot(config, game_state, headless=True))
+        asyncio.run(run_bot(config, game_state, headless=True, serve=args.serve))
     else:
         # GUI mode - choose UI framework
         if args.ui == "qt":
@@ -121,7 +219,8 @@ def main():
             def run_websocket_thread():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(run_bot(config, game_state, headless=False, client_holder=client_holder))
+                loop.run_until_complete(run_bot(config, game_state, headless=False,
+                                                client_holder=client_holder, serve=args.serve))
 
             ws_thread = threading.Thread(target=run_websocket_thread, daemon=True)
             ws_thread.start()

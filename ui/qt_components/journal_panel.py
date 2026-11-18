@@ -1,117 +1,72 @@
 """
-Journal Panel Component
-
-Displays journal entries for produce and pets with variants logged.
+Journal: which crop and pet variants the account has logged, what is still
+missing, and whether the bot can log right now (it needs a Camera).
 """
 
-from PyQt6.QtWidgets import QWidget, QTextEdit, QVBoxLayout
+from PyQt6.QtWidgets import QGridLayout, QVBoxLayout
 
-from .theme import VSCodeTheme
+from automation import economy as eco
+
+from .dashboard_page import AttentionRow
+from .model import has_camera, journal_counts
+from .theme import Carbon as C, spaced
+from .widgets import CarbonTable, Cell, Page, section_head, set_text
 
 
-class JournalPanel(QWidget):
-    """Panel for displaying journal entries"""
-
-    def __init__(self):
-        super().__init__()
-        self.theme = VSCodeTheme
-        self._last_content = ""  # Track last content to prevent unnecessary updates
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.text_edit = QTextEdit()
-        self.text_edit.setReadOnly(True)
-        layout.addWidget(self.text_edit)
-
-        self.setLayout(layout)
-
-    def update_data(self, slot_data: dict):
-        """Update journal display"""
-        text = []
-
-        # Parse journal data
-        journal = slot_data.get("journal", {})
-
-        if journal:
-            text.append("📖 Journal Entries:\n")
-
-            # Produce section
-            produce = journal.get("produce", {})
-            if produce:
-                text.append("🌾 Produce Discovered:")
-                produce_count = 0
-                for species, data in sorted(produce.items()):
-                    variants = data.get("variantsLogged", [])
-                    if variants:
-                        produce_count += 1
-                        variant_names = []
-                        for variant in variants:
-                            variant_name = variant.get("variant", "Unknown")
-                            variant_names.append(variant_name)
-
-                        # Compact formatting: show variants on next line if > 3
-                        variant_count = len(variants)
-                        variants_str = ", ".join(variant_names)
-
-                        if variant_count <= 3:
-                            # Short list - show on one line
-                            text.append(f"  {species:<20} ({variant_count} variant{'s' if variant_count != 1 else ''}: {variants_str})")
-                        else:
-                            # Long list - show count on first line, variants indented on next
-                            text.append(f"  {species:<20} ({variant_count} variants):")
-                            text.append(f"    {variants_str}")
-
-                text.append(f"\n  Total: {produce_count} produce types\n")
-            else:
-                text.append("🌾 Produce Discovered: None\n")
-
-            # Pets section
-            pets = journal.get("pets", {})
-            if pets:
-                text.append("🐾 Pets Discovered:")
-                pets_count = 0
-                for species, data in sorted(pets.items()):
-                    variants = data.get("variantsLogged", [])
-                    if variants:
-                        pets_count += 1
-                        variant_names = []
-                        for variant in variants:
-                            variant_name = variant.get("variant", "Unknown")
-                            variant_names.append(variant_name)
-
-                        # Compact formatting: show variants on next line if > 3
-                        variant_count = len(variants)
-                        variants_str = ", ".join(variant_names)
-
-                        if variant_count <= 3:
-                            # Short list - show on one line
-                            text.append(f"  {species:<20} ({variant_count} variant{'s' if variant_count != 1 else ''}: {variants_str})")
-                        else:
-                            # Long list - show count on first line, variants indented on next
-                            text.append(f"  {species:<20} ({variant_count} variants):")
-                            text.append(f"    {variants_str}")
-
-                text.append(f"\n  Total: {pets_count} pet types")
-            else:
-                text.append("🐾 Pets Discovered: None")
-
+def _rows(entries: dict, all_species):
+    logged, missing = [], []
+    for sp in sorted(set(all_species) | set(entries)):
+        variants = [v.get("variant") for v in (entries.get(sp) or {}).get("variantsLogged") or [] if v.get("variant")]
+        if variants:
+            logged.append([Cell(spaced(sp)), Cell(str(len(variants)), mono=True, right=True),
+                           Cell(", ".join(variants), C.TEXT_SECONDARY, tip=", ".join(variants))])
         else:
-            text.append("📖 Journal:\n")
-            text.append("\n  Journal data not available yet.")
-            text.append("\n  Your journal will populate as you:")
-            text.append("  • Harvest new produce")
-            text.append("  • Discover new pets")
-            text.append("  • Find variant mutations")
+            missing.append([Cell(spaced(sp), C.TEXT_HELPER), Cell("0", C.TEXT_HELPER, mono=True, right=True),
+                            Cell("Not logged", C.TEXT_HELPER)])
+    return logged + missing
 
-        # Only update if content changed (prevents interrupting copy/paste)
-        new_content = "\n".join(text)
-        if new_content != self._last_content:
-            self._last_content = new_content
-            # Save scroll position
-            scrollbar = self.text_edit.verticalScrollBar()
-            scroll_pos = scrollbar.value()
-            # Update content
-            self.text_edit.setPlainText(new_content)
-            # Restore scroll position
-            scrollbar.setValue(scroll_pos)
+
+class JournalPage(Page):
+    def __init__(self):
+        super().__init__("Journal", "Each crop and pet variant is logged once.")
+        self.camera = AttentionRow()
+        self.camera.set("info", "Journal paused", "No Camera on this account, and the Camera isn't sold in shops. "
+                        "Logging starts once you have one.", "")
+        self.outer.addWidget(self.camera)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(C.S5)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        box = QVBoxLayout()
+        box.setSpacing(0)
+        head, self.crop_note = section_head("Crops", "")
+        box.addWidget(head)
+        self.crops = CarbonTable([("Crop", 180), (">Variants", 96), ("Logged", "stretch")], fit_height=False)
+        box.addWidget(self.crops, 1)
+        grid.addLayout(box, 0, 0)
+        box = QVBoxLayout()
+        box.setSpacing(0)
+        head, self.pet_note = section_head("Pets", "")
+        box.addWidget(head)
+        self.pets = CarbonTable([("Pet", 180), (">Variants", 96), ("Logged", "stretch")], fit_height=False)
+        box.addWidget(self.pets, 1)
+        grid.addLayout(box, 0, 1)
+        self.outer.addLayout(grid, 1)
+
+    def update_data(self, snap):
+        crops, crops_total, pets, pets_total = journal_counts(snap)
+        on = bool(snap.cfg.get("journal")) if snap.brain is not None else False
+        state = "The bot fills it as it plays" if on and has_camera(snap) else (
+            "Filling is off in Settings" if snap.brain is not None and not on else
+            "Brain disabled" if snap.brain is None else "Paused until the account has a Camera")
+        self.set_helper(f"Each crop and pet variant is logged once. Crops {crops} of {crops_total} logged, "
+                        f"pets {pets} of {pets_total}. {state}.")
+        self.camera.setVisible(snap.ready and on and not has_camera(snap))
+        j = snap.data.get("journal") or {}
+        set_text(self.crop_note, f"{crops} of {crops_total} species")
+        set_text(self.pet_note, f"{pets} of {pets_total} species")
+        self.crops.set_rows(_rows(j.get("produce") or {}, eco.CROPS), empty="No journal data yet")
+        self.pets.set_rows(_rows(j.get("pets") or {}, eco.PETS), empty="No journal data yet")
+
+
+JournalPanel = JournalPage

@@ -200,3 +200,9 @@ $RECYCLE.BIN/
 *.backup
 *.swp
 *.swo
+bot_state.json
+brain*.out
+gui_run.out
+state/
+serve_run.out
+remote_ui.out

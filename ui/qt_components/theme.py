@@ -1,275 +1,273 @@
 """
-VS Code Dark+ inspired theme for Magic Garden Bot
+IBM Carbon (Gray 100 dark theme) tokens for the Garden Bot UI.
 
-Color palette based on Visual Studio Code's Dark+ theme.
+Every color, font and spacing value the Qt UI uses lives here. Regions are
+separated by layer tone and 1px rules, corners are square (the toggle switch
+is the only rounded thing), numbers are set in the mono face.
 """
 
-from PyQt6.QtGui import QColor
+import re
+from typing import Optional
+
+from PyQt6.QtGui import QColor, QFont, QFontDatabase
 
 
-class VSCodeTheme:
-    """VS Code Dark+ color theme"""
+class Carbon:
+    """Carbon g100 tokens"""
 
-    # Base colors
-    BG_EDITOR = "#1e1e1e"           # Main editor background
-    BG_SIDEBAR = "#252526"          # Sidebar background
-    BG_PANEL = "#1e1e1e"            # Panel background
-    BG_ACTIVITY_BAR = "#333333"     # Activity bar
-    BG_INPUT = "#3c3c3c"            # Input fields
-    BG_HOVER = "#2a2d2e"            # Hover state
+    # Layers
+    BACKGROUND = "#161616"
+    LAYER_01 = "#262626"
+    LAYER_02 = "#393939"
+    BORDER_SUBTLE = "#393939"
+    LAYER_HOVER_01 = "#333333"
+    LAYER_HOVER_02 = "#474747"
+    FIELD_BORDER = "#8D8D8D"
 
-    # Borders
-    BORDER = "#3e3e42"              # Standard border
-    BORDER_ACTIVE = "#007acc"       # Active/focused border
+    # Text
+    TEXT_PRIMARY = "#F4F4F4"
+    TEXT_SECONDARY = "#C6C6C6"
+    TEXT_HELPER = "#8D8D8D"
+    TEXT_PLACEHOLDER = "#6F6F6F"
+    TEXT_ON_COLOR = "#FFFFFF"
 
-    # Text colors
-    TEXT_PRIMARY = "#d4d4d4"        # Main text
-    TEXT_SECONDARY = "#858585"      # Secondary/muted text
-    TEXT_DISABLED = "#656565"       # Disabled text
+    # Interaction
+    INTERACTIVE = "#0F62FE"
+    INTERACTIVE_HOVER = "#0050E6"
+    FOCUS = "#FFFFFF"
 
-    # Accent colors
-    ACCENT_BLUE = "#007acc"         # Primary accent (blue)
-    ACCENT_TEAL = "#4ec9b0"         # Secondary accent (teal)
-    ACCENT_ORANGE = "#ce9178"       # Tertiary accent (orange/salmon)
+    # Support
+    SUCCESS = "#42BE65"
+    TOGGLE_ON = "#24A148"
+    TOGGLE_OFF = "#6F6F6F"
+    WARNING = "#F1C21B"
+    ERROR = "#FA4D56"
+    INFO = "#4589FF"
+    RAINBOW = "#BE95FF"
+    MONEY = "#F1C21B"
 
-    # Status colors
-    SUCCESS = "#89d185"             # Green - success/ready
-    WARNING = "#dcdcaa"             # Yellow - warning
-    ERROR = "#f48771"               # Red/salmon - error
-    INFO = "#9cdcfe"                # Light blue - info
+    # Notification row tints (warning/error rows in "Needs attention")
+    WARNING_ROW = "#2A2618"
+    ERROR_ROW = "#2C1A1C"
 
-    # Garden-specific colors
-    GARDEN_BG = "#1a1a1a"           # Garden canvas background
-    GARDEN_BOARDWALK = "#4a4a4a"    # Boardwalk color
-    GARDEN_BOARDWALK_BORDER = "#5a5a5a"
-    GARDEN_EMPTY = "#2d2d30"        # Empty tile
-    GARDEN_EMPTY_BORDER = "#3e3e42"
-    GARDEN_READY = "#89d185"        # Ready to harvest (green)
-    GARDEN_READY_BORDER = "#a0e0a0"
-    GARDEN_GROWN = "#ce9178"        # Grown but not ready (orange)
-    GARDEN_GROWN_BORDER = "#e0a890"
-    GARDEN_GROWING = "#dcdcaa"      # Growing (yellow)
-    GARDEN_GROWING_BORDER = "#f0e8b8"
-    GARDEN_EGG_READY = "#4ec9b0"    # Ready egg (teal)
-    GARDEN_EGG_READY_BORDER = "#60d5c0"
-    GARDEN_EGG_GROWING = "#c586c0"  # Growing egg (purple)
-    GARDEN_EGG_GROWING_BORDER = "#d5a0d0"
-    GARDEN_PET = "#c586c0"          # Pet (purple)
-    GARDEN_PET_BORDER = "#d5a0d0"
-    GARDEN_PLAYER = "#007acc"       # Player (blue)
-    GARDEN_PLAYER_BORDER = "#4da6e0"
+    # Garden cells
+    CELL_STAMPED = "#F1C21B"
+    CELL_HELD = "#FF832B"
+    CELL_RIPE = "#4589FF"
+    CELL_GROWING = "#393939"
+    CELL_EGG = "#A56EFF"
+    CELL_FOOD = "#42BE65"
+    CELL_EMPTY = "#1C1C1C"
+    CELL_BOARDWALK = "#262626"
+    CELL_PLAYER = "#FFFFFF"
 
-    # Mutation indicator colors (bright/vibrant)
-    MUTATION_RAINBOW = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#0000ff", "#8b00ff"]
-    MUTATION_GOLD = "#ffd700"
-    MUTATION_GOLD_BORDER = "#ffe55c"
-    MUTATION_FROZEN = "#c7e6f5"     # Light blue
-    MUTATION_CHILLED = "#6db3d8"    # Medium blue
-    MUTATION_WET = "#4a90e2"        # Darker blue
-    MUTATION_AMBERSHINE = "#ffb347" # Orange
-    MUTATION_DAWNLIT = "#ff6b9d"    # Pink
+    # Spacing scale
+    S1, S2, S3, S4, S5 = 4, 8, 16, 24, 32
 
-    @classmethod
-    def get_stylesheet(cls):
-        """Generate the complete QSS stylesheet"""
-        return f"""
-            /* Main Window */
-            QMainWindow {{
-                background-color: {cls.BG_EDITOR};
-                color: {cls.TEXT_PRIMARY};
-            }}
+    @staticmethod
+    def qcolor(hex_color: str) -> QColor:
+        return QColor(hex_color)
 
-            /* Widgets */
-            QWidget {{
-                background-color: {cls.BG_EDITOR};
-                color: {cls.TEXT_PRIMARY};
-                font-family: 'Segoe UI', 'Consolas', Arial, sans-serif;
-                font-size: 10pt;
-            }}
 
-            /* Labels */
-            QLabel {{
-                color: {cls.TEXT_PRIMARY};
-                background-color: transparent;
-            }}
+_FAMILIES = None
 
-            /* Group Boxes */
-            QGroupBox {{
-                background-color: {cls.BG_SIDEBAR};
-                border: 1px solid {cls.BORDER};
-                border-radius: 4px;
-                margin-top: 0.5em;
-                padding-top: 0.75em;
-                font-weight: bold;
-                color: {cls.TEXT_PRIMARY};
-            }}
 
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 5px;
-                color: {cls.ACCENT_BLUE};
-                background-color: {cls.BG_SIDEBAR};
-                left: 10px;
-            }}
+def font_families():
+    """(sans, mono) families: IBM Plex when installed, else Segoe UI and
+    Cascadia Mono / Consolas. Needs a QApplication."""
+    global _FAMILIES
+    if _FAMILIES is None:
+        have = set(QFontDatabase.families())
 
-            /* Text Edit / Console */
-            QTextEdit {{
-                background-color: {cls.BG_PANEL};
-                color: {cls.TEXT_PRIMARY};
-                border: 1px solid {cls.BORDER};
-                border-radius: 3px;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 9pt;
-                selection-background-color: {cls.ACCENT_BLUE};
-                selection-color: {cls.TEXT_PRIMARY};
-            }}
+        def pick(*names):
+            for n in names:
+                if n in have:
+                    return n
+            return names[-1]
 
-            QTextEdit:focus {{
-                border: 1px solid {cls.BORDER_ACTIVE};
-            }}
+        _FAMILIES = (
+            pick("IBM Plex Sans", "Segoe UI"),
+            pick("IBM Plex Mono", "Cascadia Mono", "Consolas"),
+        )
+    return _FAMILIES
 
-            /* Scroll Bars */
-            QScrollBar:vertical {{
-                background-color: {cls.BG_SIDEBAR};
-                width: 12px;
-                border: none;
-            }}
 
-            QScrollBar::handle:vertical {{
-                background-color: {cls.BG_ACTIVITY_BAR};
-                min-height: 20px;
-                border-radius: 2px;
-            }}
+def font(px: int = 14, weight: str = "regular", mono: bool = False, spacing: float = 0.0) -> QFont:
+    """A QFont at a pixel size. weight: light | regular | semibold"""
+    sans, mono_family = font_families()
+    f = QFont(mono_family if mono else sans)
+    f.setPixelSize(px)
+    f.setWeight({
+        "light": QFont.Weight.Light,
+        "regular": QFont.Weight.Normal,
+        "semibold": QFont.Weight.DemiBold,
+    }.get(weight, QFont.Weight.Normal))
+    if spacing:
+        f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
+    f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    return f
 
-            QScrollBar::handle:vertical:hover {{
-                background-color: {cls.BG_HOVER};
-            }}
 
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
+def body_font() -> QFont:
+    return font(14)
 
-            QScrollBar:horizontal {{
-                background-color: {cls.BG_SIDEBAR};
-                height: 12px;
-                border: none;
-            }}
 
-            QScrollBar::handle:horizontal {{
-                background-color: {cls.BG_ACTIVITY_BAR};
-                min-width: 20px;
-                border-radius: 2px;
-            }}
+def label_font() -> QFont:
+    """12px/16px labels, letter-spacing .32px"""
+    return font(12, spacing=0.32)
 
-            QScrollBar::handle:horizontal:hover {{
-                background-color: {cls.BG_HOVER};
-            }}
 
-            /* Splitter */
-            QSplitter::handle {{
-                background-color: {cls.BORDER};
-                width: 1px;
-                height: 1px;
-            }}
+def heading_font() -> QFont:
+    return font(14, "semibold")
 
-            QSplitter::handle:hover {{
-                background-color: {cls.ACCENT_BLUE};
-            }}
 
-            /* Tabs */
-            QTabWidget::pane {{
-                border: 1px solid {cls.BORDER};
-                background-color: {cls.BG_SIDEBAR};
-                border-top: none;
-            }}
+def title_font() -> QFont:
+    return font(20, "light")
 
-            QTabBar::tab {{
-                background-color: {cls.BG_SIDEBAR};
-                color: {cls.TEXT_SECONDARY};
-                padding: 6px 16px;
-                margin-right: 2px;
-                border: 1px solid {cls.BORDER};
-                border-bottom: none;
-                border-top-left-radius: 3px;
-                border-top-right-radius: 3px;
-            }}
 
-            QTabBar::tab:selected {{
-                background-color: {cls.BG_PANEL};
-                color: {cls.TEXT_PRIMARY};
-                border-bottom: 2px solid {cls.ACCENT_BLUE};
-            }}
+def mono_font(px: int = 14) -> QFont:
+    return font(px, mono=True)
 
-            QTabBar::tab:hover:!selected {{
-                background-color: {cls.BG_HOVER};
-                color: {cls.TEXT_PRIMARY};
-            }}
 
-            /* Status Bar */
-            QStatusBar {{
-                background-color: {cls.ACCENT_BLUE};
-                color: white;
-                border: none;
-                padding: 2px;
-            }}
+def stylesheet() -> str:
+    """App-wide QSS: colors and borders only. Fonts are set with setFont so
+    per-widget sizes are never overridden by the sheet."""
+    c = Carbon
+    return f"""
+        QMainWindow, QWidget#page, QStackedWidget {{ background: {c.BACKGROUND}; }}
+        QWidget {{ color: {c.TEXT_PRIMARY}; }}
+        QLabel {{ background: transparent; }}
+        QToolTip {{
+            background: {c.LAYER_02}; color: {c.TEXT_PRIMARY};
+            border: 0; padding: 8px 16px;
+        }}
+        QScrollArea {{ background: transparent; border: 0; }}
+        QScrollArea > QWidget > QWidget {{ background: transparent; }}
+        QScrollBar:vertical {{ background: {c.BACKGROUND}; width: 8px; margin: 0; border: 0; }}
+        QScrollBar::handle:vertical {{ background: {c.LAYER_02}; min-height: 24px; }}
+        QScrollBar::handle:vertical:hover {{ background: {c.TEXT_PLACEHOLDER}; }}
+        QScrollBar:horizontal {{ background: {c.BACKGROUND}; height: 8px; margin: 0; border: 0; }}
+        QScrollBar::handle:horizontal {{ background: {c.LAYER_02}; min-width: 24px; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+        QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 
-            QStatusBar::item {{
-                border: none;
-            }}
+        QTableWidget {{
+            background: transparent; border: 0; outline: 0;
+            gridline-color: transparent; color: {c.TEXT_PRIMARY};
+            selection-background-color: {c.LAYER_02}; selection-color: {c.TEXT_PRIMARY};
+        }}
+        QTableWidget[rowbg="layer"]::item {{
+            background: {c.LAYER_01}; border: 0; border-bottom: 1px solid {c.BORDER_SUBTLE};
+            padding: 0;
+        }}
+        QTableWidget[rowbg="none"]::item {{
+            background: transparent; border: 0; border-bottom: 1px solid {c.BORDER_SUBTLE};
+            padding: 0;
+        }}
+        QTableWidget::item:selected {{ background: {c.LAYER_02}; }}
+        QTableWidget[selectable="true"]::item:hover {{ background: {c.LAYER_HOVER_01}; }}
+        QTableWidget[selectable="true"]::item:selected {{ background: {c.LAYER_02}; }}
+        QHeaderView {{ background: transparent; border: 0; }}
+        QHeaderView::section {{
+            background: {c.LAYER_02}; color: {c.TEXT_PRIMARY};
+            border: 0; padding: 0 16px;
+        }}
+        QTableCornerButton::section {{ background: {c.LAYER_02}; border: 0; }}
 
-            /* Buttons */
-            QPushButton {{
-                background-color: {cls.BG_INPUT};
-                color: {cls.TEXT_PRIMARY};
-                border: 1px solid {cls.BORDER};
-                padding: 6px 16px;
-                border-radius: 3px;
-                font-weight: normal;
-            }}
+        QLineEdit {{
+            background: transparent; border: 0; color: {c.TEXT_PRIMARY};
+            padding: 0 16px; selection-background-color: {c.INTERACTIVE};
+        }}
+        QLineEdit:focus {{ border: 2px solid {c.FOCUS}; padding: 0 14px; }}
 
-            QPushButton:hover {{
-                background-color: {cls.BG_HOVER};
-                border: 1px solid {cls.ACCENT_BLUE};
-            }}
+        QFrame#rule {{ background: {c.BORDER_SUBTLE}; border: 0; }}
+        QFrame#header {{ background: {c.BACKGROUND}; border: 0; border-bottom: 1px solid {c.BORDER_SUBTLE}; }}
+        QFrame#footer {{ background: {c.LAYER_01}; border: 0; border-top: 1px solid {c.BORDER_SUBTLE}; }}
+        QFrame#footer QLabel {{ color: {c.TEXT_SECONDARY}; padding: 0 16px; }}
+        QFrame#footer QLabel[sep="true"] {{ border-left: 1px solid {c.BORDER_SUBTLE}; }}
+        QFrame#settingRow {{ border: 0; border-bottom: 1px solid {c.BORDER_SUBTLE}; }}
+        QWidget#gapGrid {{ background: {c.BORDER_SUBTLE}; }}
+        QWidget#tile {{ background: {c.LAYER_01}; }}
+        QFrame#stepper {{ background: {c.LAYER_01}; border: 0; border-bottom: 1px solid {c.FIELD_BORDER}; }}
+    """
 
-            QPushButton:pressed {{
-                background-color: {cls.ACCENT_BLUE};
-                color: white;
-            }}
 
-            /* Combo Box */
-            QComboBox {{
-                background-color: {cls.BG_INPUT};
-                color: {cls.TEXT_PRIMARY};
-                border: 1px solid {cls.BORDER};
-                padding: 4px 8px;
-                border-radius: 3px;
-            }}
+# ----------------------------------------------------------------- formatting
 
-            QComboBox:hover {{
-                border: 1px solid {cls.ACCENT_BLUE};
-            }}
+def short_number(value, signed: bool = False) -> str:
+    """132120000000 -> '132.12B', 412000 -> '412K', 2708 -> '2,708'."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    sign = "-" if n < 0 else ("+" if signed and n > 0 else "")
+    n = abs(n)
+    if n < 10_000:
+        return f"{sign}{n:,.0f}"
+    for limit, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if n >= limit:
+            text = f"{n / limit:.2f}".rstrip("0").rstrip(".")
+            return f"{sign}{text}{suffix}"
+    return f"{sign}{n:,.0f}"
 
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
 
-            QComboBox QAbstractItemView {{
-                background-color: {cls.BG_INPUT};
-                color: {cls.TEXT_PRIMARY};
-                selection-background-color: {cls.ACCENT_BLUE};
-                border: 1px solid {cls.BORDER};
-            }}
+def compact_number(value) -> str:
+    """Settings values: 100000 -> '100K', 1500000 -> '1.5M', 20 -> '20'."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    for limit, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(n) >= limit:
+            return f"{n / limit:.2f}".rstrip("0").rstrip(".") + suffix
+    return f"{n:.2f}".rstrip("0").rstrip(".")
 
-            /* Frame */
-            QFrame {{
-                border: none;
-            }}
-        """
 
-    @classmethod
-    def get_qcolor(cls, color_hex: str) -> QColor:
-        """Convert hex color to QColor"""
-        return QColor(color_hex)
+def parse_number(text: str) -> Optional[float]:
+    """'100K' -> 100000, '1.5m' -> 1500000, '25%' -> 25, '10x' -> 10."""
+    t = (text or "").strip().replace(",", "").replace("×", "").rstrip("%xX").strip()
+    m = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*([kKmMbBtT]?)", t)
+    if not m:
+        return None
+    mult = {"": 1, "k": 1e3, "m": 1e6, "b": 1e9, "t": 1e12}[m.group(2).lower()]
+    return float(m.group(1)) * mult
+
+
+def full_number(value) -> str:
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def duration(seconds) -> str:
+    """45 -> '45s', 250 -> '4m', 40000 -> '11h', 200000 -> '2d'"""
+    try:
+        s = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
+def clock(seconds) -> str:
+    """161 -> '2:41', 3725 -> '1:02:05'"""
+    try:
+        s = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def spaced(name) -> str:
+    """'CommonEgg' -> 'Common Egg', 'SellBoostIII' -> 'Sell Boost III'"""
+    s = str(name or "")
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", s)
+    return re.sub(r"(?<=[a-zA-Z])(?=\d)", " ", s).replace("_", " ")

@@ -108,11 +108,19 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
     """
     Initialize pet positions from game state.
 
+    DISABLED for v2036: the server now drives pet motion itself (pets wander
+    via server-published motion paths under petSlotInfos[id].motion). The old
+    client-pushed ``PetPositions`` message no longer exists, so seeding
+    positions here is both unnecessary (pets appear automatically) and invalid.
+    Kept as a no-op so callers (startup) don't need to change.
+
     Args:
         client: MagicGardenClient instance
         game_state: Global game state
         wait_timeout: Maximum time to wait for slot data
     """
+    return
+
     slot_data = get_player_slot_data_for_pets(game_state)
     if not slot_data:
         slot = await wait_for_user_slot(
@@ -185,7 +193,7 @@ async def initialize_pets(client, game_state: GameState, wait_timeout: float = 1
 
             # Find player's slot
             for slot in user_slots:
-                if slot and slot.get("playerId") == game_state.get_player_id():
+                if slot and (slot.get("userId") or slot.get("playerId")) == game_state.get_player_id():
                     pet_slot_infos = slot.setdefault("petSlotInfos", {})
                     # Update each pet's position in-place on the live dict
                     for pet_id, pos in all_pet_positions.items():
@@ -205,11 +213,20 @@ async def move_pets_randomly(
     """
     Randomly move pets within garden bounds and send positions every update.
 
+    DISABLED for v2036: pet movement is now entirely server-driven. The server
+    publishes each pet's motion path (petSlotInfos[id].motion = {path, step
+    DurationMs, source:"wander"}) and there is no client ``PetPositions``
+    message anymore. A real player cannot push pet positions, so emulating that
+    would be both impossible and a detection tell. No-op; pets wander on their
+    own. See PROTOCOL_MIGRATION.md.
+
     Args:
         client: MagicGardenClient instance
         game_state: Global game state
         wait_timeout: Maximum time to wait for slot data
     """
+    return
+
     # Local coordinate bounds (0-indexed): 23 cols (0-22), 12 rows (0-11)
     MIN_X, MAX_X = 0, 22
     MIN_Y, MAX_Y = 0, 11
@@ -332,7 +349,7 @@ async def move_pets_randomly(
 
             # Find player's slot
             for slot in user_slots:
-                if slot and slot.get("playerId") == game_state.get_player_id():
+                if slot and (slot.get("userId") or slot.get("playerId")) == game_state.get_player_id():
                     pet_slot_infos = slot.setdefault("petSlotInfos", {})
                     # Update each pet's position in-place on the live dict
                     for pet_id, pos in all_pet_positions.items():
@@ -409,14 +426,12 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
                 ):
                     crop_item_id = produce_by_species[required_food][0]
 
-                    # Send FeedPet action
-                    feed_message = {
+                    # Send FeedPet action (QuinoaCommand envelope in v2036)
+                    await client.send_command({
                         "type": "FeedPet",
                         "petItemId": pet_id,
                         "cropItemId": crop_item_id,
-                        "scopePath": ["Room", "Quinoa"],
-                    }
-                    await client.send(feed_message)
+                    })
                     print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with {required_food}")
 
                     # Remove the used produce from our lookup to avoid double-feeding
@@ -477,14 +492,12 @@ async def feed_hungry_pets(client, game_state: GameState, config: PetFoodConfig)
                         ):
                             crop_item_id = fresh_produce_by_species[required_food][0]
 
-                            # Send FeedPet action
-                            feed_message = {
+                            # Send FeedPet action (QuinoaCommand envelope in v2036)
+                            await client.send_command({
                                 "type": "FeedPet",
                                 "petItemId": pet_id,
                                 "cropItemId": crop_item_id,
-                                "scopePath": ["Room", "Quinoa"],
-                            }
-                            await client.send(feed_message)
+                            })
                             print(f"Fed {pet_species} (ID: {pet_id[:8]}...) with freshly harvested {required_food}")
 
                             # Update the main produce_by_species to reflect this usage
@@ -530,7 +543,8 @@ async def run_pet_feeder(client, game_state: GameState, config: PetFoodConfig):
             await asyncio.sleep(5)  # Check every 5 seconds
 
             try:
-                await feed_hungry_pets(client, game_state, config)
+                async with client.body_lock:
+                    await feed_hungry_pets(client, game_state, config)
             except Exception as e:
                 print(f"Error in pet feeding task: {e}")
                 # Continue on errors
