@@ -4,8 +4,8 @@ writes with brain.apply_settings({key: value}) (applied live, saved to
 bot_config.json).
 """
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from .theme import Carbon as C, body_font, compact_number, font, label_font, title_font
 from .widgets import FlatButton, NumberStepper, Toggle, make_label, set_text
@@ -32,6 +32,11 @@ def _times(v):
 # (title, about, rows). Row: ("num", key, label, help, step, lo, hi, fmt, scale)
 #                            ("toggle", key, label, help) | ("shop", stall, label, help)
 GROUPS = [
+    ("Focus", "What the bot optimises for. Pet feeding always stays on.", [
+        ("choice", "focus", "Focus", "Journal then profit switches to coins by itself once nothing loggable is left", [
+            ("journal_then_profit", "Journal, then profit"), ("profit", "Profit"),
+            ("journal", "Journal"), ("pets", "Pets")]),
+    ]),
     ("Money", "What to hold for a Gold/Rainbow stamp and when to sell.", [
         ("num", "hold_for_gold_min_base_price", "Hold crops for a stamp above",
          "Ripe crops worth less are sold right away", 50_000, 0, 10_000_000, _coins, 1),
@@ -71,6 +76,47 @@ GROUPS = [
 
 INT_KEYS = {"hold_for_gold_min_base_price", "cheap_crop_value", "sell_when_produce_count", "min_coins_to_keep",
             "food_tiles_per_pet", "egg_tiles", "spare_granters_to_keep", "journal_tiles"}
+
+
+class ChoiceSwitcher(QWidget):
+    """Carbon content switcher: one square segment per option."""
+
+    valueChanged = pyqtSignal(str)
+
+    def __init__(self, options):
+        super().__init__()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.value = ""
+        self.buttons = {}
+        for key, label in options:
+            b = QPushButton(label)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFixedHeight(40)
+            b.clicked.connect(lambda _=False, k=key: self._pick(k))
+            lay.addWidget(b)
+            self.buttons[key] = b
+        self._restyle()
+
+    def _pick(self, key):
+        if key != self.value:
+            self.value = key
+            self._restyle()
+            self.valueChanged.emit(key)
+
+    def setValue(self, key):  # noqa: N802 - Qt style
+        if key in self.buttons and key != self.value:
+            self.value = key
+            self._restyle()
+
+    def _restyle(self):
+        for key, b in self.buttons.items():
+            on = key == self.value
+            b.setStyleSheet(
+                f"QPushButton {{ border: 1px solid {C.LAYER_02}; border-radius: 0; padding: 0 16px;"
+                f" background: {'#F4F4F4' if on else C.LAYER_01}; color: {'#161616' if on else C.TEXT_SECONDARY}; }}"
+                f" QPushButton:hover {{ background: {'#F4F4F4' if on else C.LAYER_02}; }}")
 
 
 class SettingRow(QFrame):
@@ -168,6 +214,11 @@ class SettingsPage(QWidget):
             t.toggled.connect(lambda on, k=ckey: self._changed(k, on))
             self.controls[ckey] = (kind, t, 1)
             return t
+        if kind == "choice":
+            c = ChoiceSwitcher(row[4])
+            c.valueChanged.connect(lambda v, k=row[1]: self._changed(k, v))
+            self.controls[row[1]] = ("choice", c, 1)
+            return c
         _, key, _label, _help, step, lo, hi, fmt, scale = row
         s = NumberStepper(step, lo, hi, fmt)
         s.valueChanged.connect(lambda v, k=key: self._changed(k, v))
@@ -203,6 +254,8 @@ class SettingsPage(QWidget):
             kind, _w, scale = self.controls[ckey]
             if kind == "toggle":
                 update = {ckey: bool(value)}
+            elif kind == "choice":
+                update = {ckey: str(value)}
             else:
                 v = float(value) / scale
                 update = {ckey: int(round(v)) if ckey in INT_KEYS else (round(v, 4) if scale != 1 else
@@ -239,6 +292,8 @@ class SettingsPage(QWidget):
                 w.setChecked(ckey.split(":", 1)[1] in shops)
             elif kind == "toggle":
                 w.setChecked(bool(cfg.get(ckey)))
+            elif kind == "choice":
+                w.setValue(str(cfg.get(ckey) or ""))
             else:
                 try:
                     w.setValue(float(cfg.get(ckey, 0) or 0) * scale)

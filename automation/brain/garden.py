@@ -8,7 +8,7 @@ class GardenMixin:
     # --------------------------------------------------------------- harvest
     def _harvest_targets(self, s, cheap: Optional[bool] = None) -> List[Tuple[int, int, int]]:
         food_species = set(self._food_plan(s).values())
-        hold = self._granters_working(s)
+        hold = self._has_granters(s)
         out = []
         for tile_id, obj in s["garden"].items():
             if (obj or {}).get("objectType") != "plant":
@@ -18,9 +18,11 @@ class GardenMixin:
                     continue
                 sp = sl.get("species")
                 key = (int(tile_id), idx)
-                if key in self._pending_harvest or sp in self.never_harvest or sp in food_species:
-                    continue
                 muts = sl.get("mutations") or []
+                if key in self._pending_harvest or sp in self.never_harvest:
+                    continue
+                if sp in food_species and not eco.has_growth_mutation(muts):
+                    continue  # pet food; a Gold/Rainbow-stamped one is sold like any money crop
                 if hold and eco.base_price(sp) >= self.hold_min_base and not eco.has_growth_mutation(muts):
                     continue  # wait for a Gold/Rainbow stamp
                 value = eco.crop_value(sp, sl.get("size", 50), muts)
@@ -100,9 +102,10 @@ class GardenMixin:
             growing = {(o or {}).get("species") for o in s["garden"].values()}
             journal_now = sum(1 for sp in growing if sp in wanted)
             todo = sorted(sp for sp in wanted if sp not in growing)
-            if todo and journal_now < self.journal_tiles:
+            cap = max(self.journal_tiles, 40) if self.journal_first_active else self.journal_tiles
+            if todo and journal_now < cap:
                 return ("seed", todo[0])
-        if len(self._egg_tiles(s)) < self.egg_tiles:
+        if len(self._egg_tiles(s)) < self.effective_egg_tiles:
             egg = self._choose_egg(s)
             if egg:
                 return ("egg", egg)

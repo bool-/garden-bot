@@ -26,7 +26,7 @@ class PetsMixin:
             for it in self._produce(s):
                 if it.get("species") in diet:
                     v = eco.crop_value(it["species"], it.get("size", 50), it.get("mutations"))
-                    options.append((v, "inv", it))
+                    options.append((v, "inv", it, eco.has_growth_mutation(it.get("mutations"))))
             # 2) ripe diet crops in the garden (cheap ones only; never stamped ones)
             for tile_id, obj in s["garden"].items():
                 if (obj or {}).get("objectType") != "plant":
@@ -34,13 +34,17 @@ class PetsMixin:
                 for idx, sl in enumerate(obj.get("slots") or []):
                     if not sl or sl.get("species") not in diet or s["now"] < sl.get("endTime", 0):
                         continue
-                    if (int(tile_id), idx) in self._pending_harvest or eco.has_growth_mutation(sl.get("mutations")):
+                    if (int(tile_id), idx) in self._pending_harvest:
                         continue
                     v = eco.crop_value(sl["species"], sl.get("size", 50), sl.get("mutations"))
-                    options.append((v, "garden", (int(tile_id), idx)))
+                    options.append((v, "garden", (int(tile_id), idx), eco.has_growth_mutation(sl.get("mutations"))))
 
-            # Never feed something worth far more than a full bar.
-            options = [o for o in options if o[0] <= max(cap * 2, 1)]
+            # Never feed a Gold/Rainbow-stamped crop (that is money). Otherwise
+            # avoid feeding something worth far more than a full bar, unless
+            # the pet is starving: an empty bar switches its abilities off.
+            options = [o for o in options if not o[3]]
+            if not starving:
+                options = [o for o in options if o[0] <= max(cap * 2, 1)]
             if not options:
                 continue
             fitting = [o for o in options if o[0] <= deficit]
@@ -54,7 +58,7 @@ class PetsMixin:
             else:
                 continue
 
-            value, where, ref = choice
+            value, where, ref, _stamped = choice
             if where == "inv":
                 await self._select(s, ref["id"])
                 crop_id = ref["id"]

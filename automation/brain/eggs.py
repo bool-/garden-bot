@@ -67,6 +67,7 @@ class EggsMixin:
         if big != fast:
             growing = [o.get("eggId") for _, o in self._egg_tiles(s)]
             big_now = sum(1 for e in growing if e != fast)
-            if big_now < round(self.egg_tiles * self.big_egg_share):
+            share = max(self.big_egg_share, 0.5) if self.journal_first_active else self.big_egg_share
+            if big_now < round(self.effective_egg_tiles * share):
                 return big
         return fast

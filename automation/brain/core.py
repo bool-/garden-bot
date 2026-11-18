@@ -29,6 +29,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         self._journal_pending = set()  # (species, variant) logged, not yet in server state
         self._camera_asked_at = 0.0
         self._rejections_seen = 0.0  # time of the newest rejection already logged
+        self._journal_done = False
         self._camera_accepted = False
         self._data_build = str(eco.GAME.get("build"))
         self._unbuyable = self._load_unbuyable()  # (shop, item key) the server rejected
@@ -57,6 +58,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         "upgrades_per_tick": ("upgrade_per_tick", int),
         "journal": ("journal_enabled", bool),
         "journal_tiles": ("journal_tiles", int),
+        "focus": ("focus", str),
     }
     DEFAULTS = {
         "min_coins_to_keep": 0, "buy_shops": ["seed", "egg"], "hold_for_gold_min_base_price": 100_000,
@@ -64,7 +66,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         "harvest_batch": 12, "never_plant": [], "never_harvest": [], "tools_to_buy": [], "egg_tiles": 8,
         "big_egg_share": 0.25, "cheap_crop_value": 10_000, "never_hatch": [], "sell_original_pets": False,
         "spare_granters_to_keep": 2, "sell_pets_when_count": 4, "upgrade_when_better_by": 10,
-        "upgrades_per_tick": 3, "journal": True, "journal_tiles": 6,
+        "upgrades_per_tick": 3, "journal": True, "journal_tiles": 6, "focus": "journal_then_profit",
     }
 
     def _apply_cfg(self, cfg: Dict[str, Any]):
@@ -183,6 +185,45 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
     def _produce(s) -> List[dict]:
         return [i for i in s["items"] if i.get("itemType") == "Produce" and i.get("id") not in s["locked"]]
 
+    def _has_granters(self, s) -> bool:
+        """A Gold/Rainbow pet is on the team (fed or not: the bot feeds it).
+        This, not current hunger, decides whether valuable crops are held
+        for a stamp; a hungry moment must not trigger a sell-everything."""
+        return any(eco.GRANTER_ABILITIES & set(p.get("abilities") or []) for p in s["pets"] if p)
+
+    FOCUSES = ("journal_then_profit", "profit", "journal", "pets")
+
+    @property
+    def journal_first_active(self) -> bool:
+        if not self.journal_enabled:
+            return False
+        if self.focus == "journal":
+            return True
+        return self.focus == "journal_then_profit" and not self._journal_done
+
+    @property
+    def effective_egg_tiles(self) -> int:
+        """Pets focus: many more hatch rolls for Gold/Rainbow pets."""
+        return max(self.egg_tiles, 30) if self.focus == "pets" else self.egg_tiles
+
+    def _update_journal_goal(self, s):
+        """Journal-first ends by itself once nothing loggable is left."""
+        if self.focus != "journal_then_profit" or not self.journal_enabled or not self._has_camera(s):
+            return
+        unlogged_eggs = False
+        logged_pets = set((s["data"].get("journal") or {}).get("pets") or {})
+        for egg in self._usable_eggs(s):
+            if any(p not in logged_pets for p in (eco.EGGS.get(egg) or {}).get("weights") or {}):
+                unlogged_eggs = True
+                break
+        growing_unlogged = any((o or {}).get("species") in self._journal_wanted_species(s)
+                               for o in s["garden"].values())
+        done = not self._journal_wanted_species(s) and not unlogged_eggs and not growing_unlogged \
+            and not self._journal_targets(s)
+        if done and not self._journal_done:
+            self._log("journal: nothing left the bot can log, switching to profit")
+        self._journal_done = done
+
     def _granters_working(self, s) -> bool:
         return any(
             (p.get("hunger") or 0) > 0 and eco.GRANTER_ABILITIES & set(p.get("abilities") or [])
@@ -223,6 +264,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
             "held_for_stamp": held,
             "ready_to_harvest": len(self._harvest_targets(s)),
             "egg_tiles": len(self._egg_tiles(s)),
+            "goal": "journal" if self.journal_first_active else ("pets" if self.focus == "pets" else "profit"),
             "journal_crops": len((s["data"].get("journal") or {}).get("produce") or {}),
             "journal_pets": len((s["data"].get("journal") or {}).get("pets") or {}),
             "journal_total_crops": len(eco.CROPS),
@@ -284,6 +326,10 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         self._pending_harvest = still
 
         self._log_rejections()
+        try:
+            self._update_journal_goal(s)
+        except Exception as e:
+            print(f"[brain] journal goal check failed: {e!r}")
         try:
             self.last_plan = self._summarize(s)
         except Exception:
