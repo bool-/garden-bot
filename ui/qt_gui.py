@@ -9,6 +9,7 @@ you stand on.
 """
 
 import asyncio
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -79,7 +80,8 @@ class MagicGardenGUI(QMainWindow):
             app.setStyle("Fusion")
             app.setFont(font(14))
         self.setWindowTitle("Garden Bot")
-        self.setWindowIcon(QIcon("magic_garden_bot.ico"))
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                              "magic_garden_bot.ico")))
         self._fit_to_screen()
         self.setStyleSheet(stylesheet())
 

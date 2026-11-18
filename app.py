@@ -6,6 +6,7 @@ Main application that orchestrates the bot, automation tasks, and GUI.
 
 import asyncio
 import argparse
+import os
 import threading
 import sys
 
@@ -78,6 +79,21 @@ def remote_settings(config) -> dict:
     return remote
 
 
+ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "magic_garden_bot.ico")
+
+
+def app_icon():
+    from PyQt6.QtGui import QIcon
+    return QIcon(ICON_PATH)
+
+
+def set_windows_app_id():
+    """Own taskbar entry and icon on Windows instead of grouping under python.exe."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("magicgarden.bot.client.1.0")
+
+
 def run_remote_window(url: str, token: str):
     """Window only: watch and steer a bot that runs somewhere else."""
     from PyQt6.QtWidgets import QApplication
@@ -86,7 +102,9 @@ def run_remote_window(url: str, token: str):
 
     source = RemoteSource(url, token)
     holder = {"client": RemoteClient(source), "brain": RemoteBrain(source), "remote": source}
+    set_windows_app_id()
     app = QApplication(sys.argv)
+    app.setWindowIcon(app_icon())
     window = MagicGardenGUI(RemoteGameState(source), None, client_holder=holder)
     window.setWindowTitle(f"Garden Bot (remote: {url})")
     window.show()

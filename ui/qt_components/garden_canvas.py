@@ -5,7 +5,7 @@ do with each tile. The player's tile gets a 2px white outline.
 
 from typing import Optional
 
-from PyQt6.QtCore import QEvent, QRect, QSize, Qt
+from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QToolTip, QWidget
 
@@ -13,19 +13,21 @@ from game_state import GameState
 from utils.constants import SPAWN_POSITIONS
 
 from .model import classify_tile, garden_counts, tile_tooltip, DEFAULT_HOLD_MIN_BASE
+from .tile_art import describe, paint_tile
 from .theme import Carbon as C, label_font, mono_font
 from .widgets import make_label, set_text
 
 COLS, ROWS, GAP = 23, 12, 2
 
+# Legend swatches (the map itself is drawn by tile_art.paint_tile).
 CELL_COLORS = {
-    "stamped": C.CELL_STAMPED,
-    "held": C.CELL_HELD,
-    "ripe": C.CELL_RIPE,
-    "growing": C.CELL_GROWING,
-    "egg": C.CELL_EGG,
-    "food": C.CELL_FOOD,
-    "empty": C.CELL_EMPTY,
+    "stamped": "#F1C21B",
+    "held": "#FF832B",
+    "ripe": "#6FDC8C",
+    "growing": "#3E5A3A",
+    "egg": "#A56EFF",
+    "food": "#42BE65",
+    "empty": "#2E241C",
 }
 
 LEGEND = [
@@ -164,18 +166,19 @@ class GardenCanvas(QWidget):
             p.end()
             return
         tiles = self._tiles()
-        walk = QColor(C.CELL_BOARDWALK)
-        colors = {k: QColor(v) for k, v in CELL_COLORS.items()}
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(QRect(ox - GAP, oy - GAP, COLS * (cell + GAP) + GAP, ROWS * (cell + GAP) + GAP),
+                   QColor("#1B1612"))
         for vrow in range(ROWS):
             for vcol in range(COLS):
                 x = ox + vcol * (cell + GAP)
                 y = oy + vrow * (cell + GAP)
                 tid = visual_to_tile_id(vrow, vcol)
+                rect = QRectF(x, y, cell, cell)
                 if tid is None:
-                    color = walk
+                    paint_tile(p, rect, {}, walk=True)
                 else:
-                    color = colors[classify_tile(tiles.get(str(tid)), self.now_ms, self.hold_min, self.food)]
-                p.fillRect(QRect(x, y, cell, cell), color)
+                    paint_tile(p, rect, describe(tiles.get(str(tid)), self.now_ms, self.hold_min, self.food))
         you = self._player_cell()
         if you:
             vrow, vcol = you
