@@ -9,6 +9,13 @@ import argparse
 import threading
 import sys
 
+# Windows consoles default to cp1252, which crashes on the status glyphs we print.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from config import load_config
 from game_state import GameState
 from network.client import MagicGardenClient
@@ -56,6 +63,14 @@ async def run_bot(config, game_state, headless=False, client_holder=None):
     if client_holder is not None:
         client_holder["client"] = client
         client_holder["loop"] = asyncio.get_running_loop()
+
+    if (config.brain or {}).get("enabled"):
+        from automation.brain import Brain
+
+        print("Brain enabled: feeding, shopping, selling, harvesting and planting on one loop")
+        client.register_task(lambda: Brain(client, game_state, config.brain).run())
+        await client.run()
+        return
 
     # Register automation task factories (lambdas that create new task instances)
     client.register_task(

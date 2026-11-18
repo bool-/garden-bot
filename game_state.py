@@ -281,7 +281,7 @@ class GameState:
             self._user_slot_index = None
 
             for idx, slot in enumerate(user_slots):
-                if slot and slot.get("playerId") == self._player_id:
+                if slot and (slot.get("userId") or slot.get("playerId")) == self._player_id:
                     self._user_slot_index = idx
                     break
 
@@ -306,7 +306,7 @@ class GameState:
             user_slots = quinoa_state.get("userSlots", [])
 
             for slot in user_slots:
-                if slot and slot.get("playerId") == self._player_id:
+                if slot and (slot.get("userId") or slot.get("playerId")) == self._player_id:
                     return deepcopy(slot)
 
             return None

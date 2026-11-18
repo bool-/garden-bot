@@ -200,24 +200,29 @@ class ShopPanel(QWidget):
         item_type = item_data.get("itemType")
         item_name = item_data.get("name", "Unknown")
 
-        # Build purchase message based on item type
-        message = {
-            "scopePath": ["Room", "Quinoa"],
-            "type": "BuyShopItem",
-            "shopType": shop_key,
+        # v2036: purchases go through PurchaseShopItem wrapped in a QuinoaCommand.
+        # The old "BuyShopItem" type no longer exists. "shop" is the shop key
+        # (e.g. "seed"/"egg"/"tool"/"decor") and the item is a discriminated
+        # union keyed on itemType.
+        item = {"itemType": item_type}
+        if item_type == "Seed":
+            item["species"] = item_data.get("species")
+        elif item_type == "Tool":
+            item["toolId"] = item_data.get("toolId")
+        elif item_type == "Egg":
+            item["eggId"] = item_data.get("eggId")
+        elif item_type == "Decor":
+            item["decorId"] = item_data.get("decorId")
+
+        command = {
+            "type": "PurchaseShopItem",
+            "shop": shop_key,
+            "viewMode": "grid",
+            "item": item,
         }
 
-        if item_type == "Seed":
-            message["species"] = item_data.get("species")
-        elif item_type == "Tool":
-            message["toolId"] = item_data.get("toolId")
-        elif item_type == "Egg":
-            message["eggId"] = item_data.get("eggId")
-        elif item_type == "Decor":
-            message["decorId"] = item_data.get("decorId")
-
         print(f"Purchasing {item_name} from {shop_key} shop...")
-        asyncio.run_coroutine_threadsafe(client.send(message), loop)
+        asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
 
         # Emit signal for any listeners
         self.purchase_requested.emit(shop_key, item_data)

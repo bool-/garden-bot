@@ -80,7 +80,7 @@ class GardenTabs(QWidget):
         for slot_index, slot in enumerate(user_slots):
             if not slot:
                 continue
-            player_id = slot.get("playerId")
+            player_id = (slot.get("userId") or slot.get("playerId"))
             if not player_id:
                 continue
 

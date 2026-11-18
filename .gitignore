@@ -200,3 +200,5 @@ $RECYCLE.BIN/
 *.backup
 *.swp
 *.swo
+bot_state.json
+brain*.out

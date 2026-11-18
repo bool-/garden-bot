@@ -7,7 +7,11 @@ message sending/receiving, and running automation tasks.
 
 import asyncio
 import json
+import random
+import re
+from urllib.parse import quote
 import traceback
+import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple, List, Callable
 
@@ -24,7 +28,7 @@ from network.protocol import (
     apply_json_patch,
     GardenFullError,
 )
-from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS, GAME_VERSION
+from utils.constants import MESSAGE_LOG_FILE, SPAWN_POSITIONS, GAME_VERSION, USER_AGENT
 
 
 class MagicGardenClient:
@@ -49,10 +53,31 @@ class MagicGardenClient:
         self.cookies = config.cookies
         self.spawn_pos = None
 
+        # Mirror the real web client's connect parameters. The device id is
+        # persistent (localStorage in a browser); the document id is per page
+        # load; the attempt counter increments on every socket the "page" opens.
+        self.version = GAME_VERSION
+        self.client_device_id = config.client_device_id
+        self.client_document_id = str(uuid.uuid4())
+        self._connection_attempt = 0
+
+        # One body: harvest walks, shop trips and pet feeding take turns.
+        self.body_lock = asyncio.Lock()
+
+        # requestId -> inner command, and the commands the server rejected.
+        self._sent_commands: Dict[str, Dict[str, Any]] = {}
+        self.rejected_commands: List[Dict[str, Any]] = []
+
         # Connection lifecycle management
         self._connected = asyncio.Event()
         self._disconnect_requested = asyncio.Event()
         self._connection_id = 0  # Incremented on each new connection
+
+        # Monotonic command sequence for QuinoaCommand envelopes. The current
+        # client (v2036) wraps every discrete game action in a QuinoaCommand
+        # carrying a per-connection incrementing commandSequence (starts at 1)
+        # and a fresh requestId UUID. Reset on each new connection.
+        self._command_sequence = 0
 
     @property
     def is_connected(self) -> bool:
@@ -67,6 +92,66 @@ class MagicGardenClient:
         print("CONNECTION LOST - Automation tasks will pause...")
         print("!" * 60 + "\n")
 
+    def _http_headers(self, room_id: Optional[str] = None) -> Dict[str, str]:
+        headers = {
+            "accept": "*/*",
+            "origin": "https://magicgarden.gg",
+            "referer": f"https://magicgarden.gg/r/{room_id}" if room_id else "https://magicgarden.gg/",
+            "user-agent": USER_AGENT,
+        }
+        if self.cookies:
+            headers["cookie"] = self.cookies
+        return headers
+
+    async def refresh_version(self, room: Optional[str] = None) -> str:
+        """Read the live client build id from the room page, like a browser
+        loading it would. Builds differ per room during rollouts (MG1 can be
+        on 2065 while a private room is on 2071), so always ask the room we
+        are about to join. Falls back to the last known build on failure."""
+        room = room or self.config.last_room or "MG1"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"https://magicgarden.gg/r/{room}",
+                    headers={"user-agent": USER_AGENT, "accept": "text/html"},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as response:
+                    html = await response.text()
+            match = re.search(r"/version/([A-Za-z0-9._-]+)/assets/", html)
+            if match:
+                if match.group(1) != self.version:
+                    print(f"Game build: {match.group(1)} (pinned fallback was {self.version})")
+                self.version = match.group(1)
+        except Exception as e:
+            print(f"Could not detect game build ({e}); using {self.version}")
+        return self.version
+
+    async def _companion_fetches(self, room_id: str, paths: List[str]):
+        """Best-effort GETs the real client makes around connecting (profile,
+        credits, streak...). Results are ignored; they only keep our HTTP
+        footprint looking like a browser tab's."""
+        base = f"https://magicgarden.gg/version/{self.version}/api/rooms/{room_id}"
+
+        async def one(session, path):
+            async with session.get(base + path, headers=self._http_headers(room_id),
+                                   timeout=aiohttp.ClientTimeout(total=15)) as r:
+                await r.read()
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                await asyncio.gather(*[one(session, p) for p in paths], return_exceptions=True)
+        except Exception:
+            pass
+
+    async def _companion_poll_task(self):
+        """The real client re-fetches credits and streak about once a minute."""
+        room_id = self.game_state.get("room_id")
+        while self.is_connected:
+            await asyncio.sleep(random.uniform(55, 65))
+            if not self.is_connected:
+                break
+            await self._companion_fetches(room_id, ["/me/credits", "/me/streak"])
+
     async def authenticate(self, room_id: str) -> Tuple[Optional[Dict], Optional[str]]:
         """
         Authenticate with server for a specific room.
@@ -77,15 +162,9 @@ class MagicGardenClient:
         Returns:
             Tuple of (auth_data, updated_cookies) or (None, None) on failure
         """
-        auth_url = f"https://magicgarden.gg/version/{GAME_VERSION}/api/rooms/{room_id}/user/authenticate-web"
-        headers = {
-            "accept": "*/*",
-            "content-type": "application/json",
-            "origin": "https://magicgarden.gg",
-            "referer": f"https://magicgarden.gg/r/{room_id}",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "cookie": self.cookies,
-        }
+        auth_url = f"https://magicgarden.gg/version/{self.version}/api/rooms/{room_id}/user/authenticate-web"
+        headers = self._http_headers(room_id)
+        headers["content-type"] = "application/json"
         payload = {"provider": "maybe-existing-jwt"}
 
         try:
@@ -113,6 +192,8 @@ class MagicGardenClient:
                         if data.get("isAuthenticated"):
                             return data, updated_cookies
 
+                    body = await response.text()
+                    print(f"  Auth HTTP {response.status}: {body[:200]}")
                     return None, None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             print(f"  Network error during authentication: {e}")
@@ -131,7 +212,18 @@ class MagicGardenClient:
         Returns:
             Tuple of (websocket, welcome_data, room_id) or (None, None, None) on failure
         """
-        url = f"wss://magicgarden.gg/version/{GAME_VERSION}/api/rooms/{room_id}/connect?surface=%22web%22&platform=%22desktop%22&playerId=%22{self.player_id}%22&version=%22{GAME_VERSION}%22&source=%22manualUrl%22&capabilities=%22fbo_mipmap_unsupported%22"
+        # Same parameters, order and JSON-string quoting as the real client.
+        self._connection_attempt += 1
+        q = lambda v: quote(json.dumps(v), safe="")
+        url = (
+            f"wss://magicgarden.gg/version/{self.version}/api/rooms/{room_id}/connect"
+            f"?surface={q('web')}&platform={q('desktop')}&version={q(self.version)}"
+            f"&capabilities={q('fbo_mipmap_unsupported')}"
+            f"&clientDeviceId={q(self.client_device_id)}&os={q('other')}"
+            f"&clientDocumentId={q(self.client_document_id)}"
+            f"&clientConnectionAttempt={self._connection_attempt}"
+            f"&clientNavigationType={q('navigate')}&clientVisibilityState={q('visible')}"
+        )
 
         print(f"\nTrying room {room_id}...")
 
@@ -141,22 +233,20 @@ class MagicGardenClient:
                 url, additional_headers=headers, compression="deflate"
             )
 
-            # Send initial messages
-            await self._send_message_raw(
-                websocket,
-                {"scopePath": ["Room"], "type": "VoteForGame", "gameName": "Quinoa"},
-            )
-            await self._send_message_raw(
-                websocket,
-                {"scopePath": ["Room"], "type": "SetSelectedGame", "gameName": "Quinoa"},
-            )
+            # Send initial handshake message. The current client (v2036+) no
+            # longer votes for / selects a game (rooms run Quinoa directly).
+            # The real client simply announces that the socket is open, and the
+            # server responds with the Welcome message.
+            await self._send_message_raw(websocket, {"type": "SocketOpened"})
 
             # Wait for Welcome message with timeout
             try:
                 message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
 
-                if message.strip().lower() == "ping":
-                    await websocket.send("pong")
+                # Server heartbeats arrive as "ping:<n>"; the real client
+                # echoes the counter back as "pong:<n>".
+                if isinstance(message, str) and message.strip().lower().startswith("ping"):
+                    await websocket.send(pong_for(message))
                     message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
 
                 try:
@@ -215,7 +305,7 @@ class MagicGardenClient:
                             if occupied_slot_count == 6:
                                 # All 6 slots occupied, check if we have one
                                 our_slot_found = any(
-                                    slot and slot.get("playerId") == self.player_id
+                                    slot and (slot.get("userId") or slot.get("playerId")) == self.player_id
                                     for slot in user_slots
                                 )
                                 if not our_slot_found:
@@ -245,8 +335,8 @@ class MagicGardenClient:
                         except asyncio.TimeoutError:
                             break
 
-                        if isinstance(followup, str) and followup.strip().lower() == "ping":
-                            await websocket.send("pong")
+                        if isinstance(followup, str) and followup.strip().lower().startswith("ping"):
+                            await websocket.send(pong_for(followup))
                             continue
 
                         try:
@@ -255,8 +345,11 @@ class MagicGardenClient:
                             continue
 
                         msg_type = follow_data.get("type")
-                        if msg_type == "PartialState":
-                            patches = follow_data.get("patches") or []
+                        if msg_type in ("RoomFrame", "PartialState"):
+                            if msg_type == "RoomFrame":
+                                patches = (follow_data.get("state") or {}).get("patches") or []
+                            else:
+                                patches = follow_data.get("patches") or []
                             for patch in patches:
                                 try:
                                     apply_json_patch(full_state, patch)
@@ -289,7 +382,7 @@ class MagicGardenClient:
                         occupied_slot_count = sum(1 for slot in user_slots if slot)
                         if occupied_slot_count == 6:
                             our_slot_found = any(
-                                slot and slot.get("playerId") == self.player_id
+                                slot and (slot.get("userId") or slot.get("playerId")) == self.player_id
                                 for slot in user_slots
                             )
                             if not our_slot_found:
@@ -352,6 +445,44 @@ class MagicGardenClient:
         self.game_state.increment_stat("messages_sent")
         log_message_to_file("SENT", message)
 
+    async def send_command(self, command: Dict[str, Any], **extra):
+        """
+        Send a discrete game action wrapped in a QuinoaCommand envelope.
+
+        The current client (v2036) no longer sends raw action messages like
+        ``{"type": "HarvestCrop", ...}``. Every discrete command is wrapped::
+
+            {
+              "scopePath": ["Room", "Quinoa"],
+              "type": "QuinoaCommand",
+              "requestId": "<uuid4>",
+              "commandSequence": <monotonic int, starts at 1>,
+              "command": { "type": "HarvestCrop", ... },
+              ...optional top-level fields (e.g. successorItemId)...
+            }
+
+        Continuous state updates (e.g. PlayerPosition) are still sent raw via
+        ``send`` and must NOT be wrapped.
+
+        Args:
+            command: The inner command dict, e.g. {"type": "HarvestCrop", ...}.
+            **extra: Extra top-level envelope fields (e.g. successorItemId).
+        """
+        self._command_sequence += 1
+        envelope = {
+            "scopePath": ["Room", "Quinoa"],
+            "type": "QuinoaCommand",
+            "requestId": str(uuid.uuid4()),
+            "commandSequence": self._command_sequence,
+            "command": command,
+        }
+        if extra:
+            envelope.update(extra)
+        self._sent_commands[envelope["requestId"]] = command
+        if len(self._sent_commands) > 500:
+            self._sent_commands.pop(next(iter(self._sent_commands)))
+        await self.send(envelope)
+
     async def send_ping(self):
         """Send a ping message to the server."""
         ping_id = int(datetime.now().timestamp() * 1000)
@@ -375,13 +506,24 @@ class MagicGardenClient:
         """
         try:
             async for message in self.websocket:
-                if message.strip().lower() == "ping":
+                if isinstance(message, str) and message.strip().lower().startswith("ping"):
                     self.game_state.increment_stat("pings_received")
-                    await self.websocket.send("pong")
+                    pong = pong_for(message)
+                    await self.websocket.send(pong)
                     self.game_state.increment_stat("pongs_sent")
-                    log_message_to_file("SENT", "pong")
+                    log_message_to_file("SENT", pong)
                     continue
                 process_message(message, self.game_state)
+                if isinstance(message, str) and '"QuinoaCommandResult"' in message[:60]:
+                    try:
+                        result = json.loads(message)
+                    except ValueError:
+                        result = {}
+                    if result.get("ok") is False:
+                        cmd = self._sent_commands.get(result.get("requestId"))
+                        if cmd:
+                            self.rejected_commands.append(cmd)
+                            print(f"Server rejected {cmd.get('type')}: {result.get('code')}")
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
@@ -483,6 +625,9 @@ class MagicGardenClient:
         for room_id in rooms_to_try:
             print(f"\n[Room {room_id}] Authenticating...")
 
+            # Load the room page first (gives this room's current build)
+            await self.refresh_version(room_id)
+
             # Authenticate for this specific room
             auth_data, updated_cookies = await self.authenticate(room_id)
 
@@ -497,10 +642,16 @@ class MagicGardenClient:
                 base_cookies = updated_cookies
                 self.cookies = updated_cookies
 
+            # The page loads the player's profile bits right after auth.
+            await self._companion_fetches(room_id, [
+                "/me", "/user/connected-accounts", "/me/credits", "/me/streak",
+                "/notifications/subscriptions", "/friends", "/me/changelog",
+            ])
+
             # Set up headers with authenticated cookies
             headers = {
                 "Origin": "https://magicgarden.gg",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "User-Agent": USER_AGENT,
                 "Cookie": updated_cookies,
             }
 
@@ -537,8 +688,17 @@ class MagicGardenClient:
         # Increment connection ID for this new connection
         self._connection_id += 1
 
+        # Reset the QuinoaCommand sequence; the server expects it to start at 1
+        # for each fresh connection.
+        self._command_sequence = 0
+
         # Signal successful connection
         self._connected.set()
+
+        # Right after the handshake the real client clears its held tool.
+        await self.send(
+            {"scopePath": ["Room", "Quinoa"], "type": "SetPlayerInteraction", "interaction": None}
+        )
 
         # Process the welcome message and store spawn position
         self.spawn_pos = process_welcome_message(welcome_data, self.game_state)
@@ -564,26 +724,92 @@ class MagicGardenClient:
                     self.game_state["user_slot_index"]
                 ].copy()
 
-        # Send PlayerPosition message with spawn position
+        # Server timeline messages keep game_state's position in sync after this.
         if spawn_pos_updated and slot_available:
-            position_message = {
-                "scopePath": ["Room", "Quinoa"],
-                "type": "PlayerPosition",
-                "position": spawn_pos_updated,
-            }
-            await self.send(position_message)
-            print(
-                f"Sent spawn position to server: ({spawn_pos_updated['x']}, {spawn_pos_updated['y']})\n"
+            # A fresh page announces its spawn tile once (the server records it
+            # as a "teleport"; later steps are then "walk"s from there, exactly
+            # like the browser). Without this our first step is a teleport.
+            await self.send(
+                {
+                    "scopePath": ["Room", "Quinoa"],
+                    "type": "PlayerPosition",
+                    "position": {"x": spawn_pos_updated["x"], "y": spawn_pos_updated["y"]},
+                }
             )
-        elif not spawn_pos_updated:
-            print("No spawn position available to send to server.\n")
+            self.game_state.set_player_position(
+                spawn_pos_updated["x"], spawn_pos_updated["y"]
+            )
+            pos = self.game_state.get_player_position()
+            print(f"Standing at ({pos['x']}, {pos['y']}) (slot {self.game_state.get_user_slot_index()})\n")
         else:
-            print(
-                "Skipped sending spawn position; user slot never became available.\n"
-            )
+            print("Garden slot never became available; movement disabled.\n")
+
+        # Once the scene is drawn the page reports its load timings and asks
+        # the pets to greet the player at spawn.
+        await self._send_load_reports(spawn_pos_updated)
 
         # Initialize pet positions
         await initialize_pets(self, self.game_state)
+
+    async def _send_load_reports(self, spawn_pos):
+        rnd = random.Random()
+        signed_in = rnd.randint(450, 900)
+        joined = signed_in + rnd.randint(250, 600)
+        splash = joined + rnd.randint(900, 2200)
+        presented = splash + rnd.randint(1200, 4200)
+        await asyncio.sleep(max(0.5, (presented - joined) / 1000.0 - 1.0))
+        marks = {
+            "auth:signed-in": signed_in,
+            "splash:loaded": splash,
+            "room:joined": joined,
+            "app:content-presented": presented,
+            "atlas:sharpening-started": presented + rnd.randint(0, 3),
+        }
+        base = {
+            "scopePath": ["Room"],
+            "type": "ClientLoadReport",
+            "firstHiddenMs": 0,
+            "transferBytesBeforeContent": rnd.randint(3800, 6200),
+            "fetchActiveMsBeforeContent": rnd.randint(700, 1900),
+            "contentAddressedFetchedBeforeContent": [],
+            "usesUncompressedAtlas": False,
+            "logicalCores": self.config_logical_cores(),
+            "network": {"effectiveType": "4g", "downlinkMbps": 10, "rttMs": 100},
+            "timeZone": "America/Los_Angeles",
+        }
+        hits = rnd.randint(38, 45)
+        steps = [
+            ("app:content-presented", {}),
+            ("atlas:pages-half", {"atlas:pages-half": marks["atlas:sharpening-started"] + rnd.randint(300, 500)}),
+            ("atlas:sharpening-ended", None),
+        ]
+        for trigger, extra in steps:
+            if extra is None:
+                sharp = marks["atlas:pages-half"] + rnd.randint(450, 750)
+                extra = {"atlas:pages-sharp": sharp, "atlas:sharpening-ended": sharp + rnd.randint(15, 40)}
+            marks.update(extra)
+            msg = dict(base)
+            msg["trigger"] = trigger
+            msg["marks"] = dict(marks)
+            msg["contentAddressedCache"] = {"status": "open", "hits": hits, "quotaExceeded": False}
+            # keep the documented key order of the real client
+            ordered = {k: msg[k] for k in ("scopePath", "type", "trigger", "marks", "firstHiddenMs",
+                                           "transferBytesBeforeContent", "fetchActiveMsBeforeContent",
+                                           "contentAddressedFetchedBeforeContent", "usesUncompressedAtlas",
+                                           "logicalCores", "network", "contentAddressedCache", "timeZone")}
+            if not self.is_connected:
+                return
+            await self.send(ordered)
+            hits += rnd.randint(5, 9)
+            await asyncio.sleep(rnd.uniform(0.3, 0.7))
+        if spawn_pos and self.is_connected:
+            await self.send({"scopePath": ["Room", "Quinoa"], "type": "RequestPetGreet",
+                             "position": {"x": spawn_pos["x"], "y": spawn_pos["y"]}})
+
+    @staticmethod
+    def config_logical_cores() -> int:
+        import os
+        return os.cpu_count() or 8
 
     async def _run_session(self):
         """
@@ -598,7 +824,12 @@ class MagicGardenClient:
             # Create and start all tasks
             tasks.append(asyncio.create_task(self._receive_messages()))
             tasks.append(asyncio.create_task(self._startup_task()))
-            tasks.append(asyncio.create_task(self._ping_task()))
+            tasks.append(asyncio.create_task(self._companion_poll_task()))
+            # NOTE: The real web client (v2036) does NOT send client-initiated
+            # "Ping" messages. The server drives the heartbeat with "ping:<n>"
+            # and the client only replies "pong" (handled in _receive_messages).
+            # Sending our own Ping was a bot tell and is no longer emitted, so
+            # the periodic ping task is intentionally not started here.
 
             # Create fresh instances of registered automation tasks
             for factory in self.task_factories:
@@ -704,3 +935,9 @@ class MagicGardenClient:
             else:
                 # Session ended normally (shouldn't happen in normal operation)
                 break
+
+
+def pong_for(ping_message: str) -> str:
+    """Echo the server heartbeat counter: "ping:3" -> "pong:3"."""
+    _, sep, counter = ping_message.strip().partition(":")
+    return f"pong:{counter}" if sep else "pong"

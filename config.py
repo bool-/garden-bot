@@ -4,9 +4,11 @@ Configuration management for Magic Garden bot.
 Handles loading, saving, and validation of bot configuration from bot_config.json.
 """
 
+import base64
 import json
 import os
 import secrets
+import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
@@ -34,6 +36,7 @@ class HarvestConfig:
     species_to_replant: list  # Species that should be replanted after harvest (e.g., Carrot, Tomato)
     min_mutations: int
     check_interval_seconds: int
+    sell_after_harvest: bool = False  # SellAllCrops sells EVERY crop in inventory
 
 
 @dataclass
@@ -57,12 +60,14 @@ class BotConfig:
     """Complete bot configuration"""
     player_id: str
     cookies: str
+    client_device_id: str  # stable per-'browser' id, like the real client's localStorage value
     last_room: Optional[str]
     search_main_rooms: bool  # Whether to search MG1-MG15 or only use specified room
     harvest: HarvestConfig
     shop: ShopConfig
     pet_food: PetFoodConfig
     reconnection: ReconnectionConfig
+    brain: Dict[str, Any] = None  # automation/brain.py settings; enabled -> replaces the separate tasks
 
 
 def get_default_shop_config():
@@ -111,6 +116,29 @@ def normalize_shop_config(raw_config):
 def generate_id(alphabet, length):
     """Generate a random ID from the given alphabet."""
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def player_id_from_cookies(cookies: str) -> Optional[str]:
+    """Return the account's player id (the Discord userId) from the mc_jwt cookie.
+
+    Since the Discord login, the room's player list identifies us by the
+    ``userId`` claim of the mc_jwt token, not by the old ``p_``/``u_`` guest id.
+    """
+    if not cookies:
+        return None
+    for pair in cookies.split(";"):
+        name, _, value = pair.strip().partition("=")
+        if name != "mc_jwt" or value.count(".") != 2:
+            continue
+        payload = value.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+        except Exception:
+            return None
+        user_id = claims.get("userId")
+        return str(user_id) if user_id else None
+    return None
 
 
 def generate_player_id():
@@ -305,6 +333,20 @@ def load_config() -> BotConfig:
             'cookie string to the "cookies" entry.'
         )
 
+    # The logged-in account decides who we are; fall back to the stored id.
+    jwt_player_id = player_id_from_cookies(cookies)
+    if jwt_player_id and jwt_player_id != player_id:
+        player_id = jwt_player_id
+        config["player_id"] = player_id
+        config_dirty = True
+
+    # Stable device id (the real client keeps one in localStorage forever)
+    client_device_id = config.get("client_device_id")
+    if not client_device_id:
+        client_device_id = str(uuid.uuid4())
+        config["client_device_id"] = client_device_id
+        config_dirty = True
+
     # Last room
     last_room = config.get("room_id")
 
@@ -345,7 +387,8 @@ def load_config() -> BotConfig:
         species_to_harvest=harvest_config.get("species", []),
         species_to_replant=harvest_config.get("species_to_replant", []),
         min_mutations=harvest_config.get("min_mutations", 3),
-        check_interval_seconds=harvest_config.get("check_interval_seconds", 30)
+        check_interval_seconds=harvest_config.get("check_interval_seconds", 30),
+        sell_after_harvest=bool(harvest_config.get("sell_after_harvest", False)),
     )
 
     pet_food_config_obj = PetFoodConfig(
@@ -363,12 +406,14 @@ def load_config() -> BotConfig:
     return BotConfig(
         player_id=player_id,
         cookies=cookies,
+        client_device_id=client_device_id,
         last_room=last_room,
         search_main_rooms=search_main_rooms,
         harvest=harvest_config_obj,
         shop=shop_config_obj,
         pet_food=pet_food_config_obj,
         reconnection=reconnection_config_obj,
+        brain=config.get("brain") or {},
     )
 
 

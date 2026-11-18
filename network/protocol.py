@@ -228,7 +228,7 @@ def process_welcome_message(data: Dict[str, Any], game_state: GameState) -> Opti
     our_slot_found = False
     for slot_idx, slot in enumerate(user_slots):
         if slot:
-            player_id = slot.get("playerId")
+            player_id = (slot.get("userId") or slot.get("playerId"))
             player_name = "Unknown"
 
             # Get player name from room data
@@ -319,6 +319,52 @@ def process_partial_state_message(data: Dict[str, Any], game_state: GameState):
     game_state.refresh_player_metadata()
 
 
+def process_room_frame_message(data: Dict[str, Any], game_state: GameState):
+    """Process RoomFrame message by applying its nested JSON patches.
+
+    The current server (v2036+) streams incremental state as ``RoomFrame``
+    messages instead of the older ``PartialState`` messages. The patch list is
+    nested one level deeper, under ``state.patches``::
+
+        {"type": "RoomFrame",
+         "publishedAtServerMs": ...,
+         "state": {"patches": [ ... RFC6902 ops ... ]},
+         "executedCommandSequence": ...}
+
+    Args:
+        data: RoomFrame message data
+        game_state: Game state to update
+    """
+    log_message_to_file("RECEIVED (RoomFrame)", data)
+
+    # Need full state (Welcome) before patches can be applied.
+    if not game_state.get_full_state_unsafe():
+        print("WARNING: Received RoomFrame before Welcome message")
+        return
+
+    state = data.get("state")
+    if not isinstance(state, dict):
+        # Some RoomFrames carry only metadata (e.g. heartbeats) with no state.
+        return
+
+    patches = state.get("patches")
+    if not patches:
+        return
+
+    for patch in patches:
+        try:
+            def apply_patch(fs):
+                apply_json_patch(fs, patch)
+            game_state.update_full_state_locked(apply_patch)
+            game_state.increment_stat("patches_applied")
+        except Exception as e:
+            print(f"ERROR applying RoomFrame patch: {e}")
+            print(f"Patch: {patch}")
+
+    game_state.set_stat("last_update", datetime.now().strftime("%H:%M:%S"))
+    game_state.refresh_player_metadata()
+
+
 def is_player_in_room_state(full_state: Dict[str, Any], player_id: str) -> bool:
     """Return True if the provided full_state shows the player in the room."""
     if not full_state or not player_id:
@@ -350,8 +396,23 @@ def process_message(message: str, game_state: GameState) -> Optional[Dict[str, A
 
         if msg_type == "Welcome":
             process_welcome_message(data, game_state)
+        elif msg_type == "RoomFrame":
+            process_room_frame_message(data, game_state)
         elif msg_type == "PartialState":
             process_partial_state_message(data, game_state)
+        elif msg_type == "QuinoaPlayerTimelineBatch":
+            me = game_state.get_player_id()
+            for entry in data.get("entries") or []:
+                to = entry.get("to")
+                if entry.get("playerId") == me and isinstance(to, dict) and "x" in to:
+                    game_state.set_player_position(to["x"], to["y"])
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
+        elif msg_type == "QuinoaPlayerTimelineSnapshot":
+            mine = (data.get("players") or {}).get(game_state.get_player_id()) or {}
+            tile = mine.get("tile")
+            if isinstance(tile, dict) and "x" in tile:
+                game_state.set_player_position(tile["x"], tile["y"])
+            log_message_to_file(f"RECEIVED ({msg_type})", data)
         elif msg_type == "Ping":
             game_state.increment_stat("pings_received")
             log_message_to_file(f"RECEIVED ({msg_type})", data)

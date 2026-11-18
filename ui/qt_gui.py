@@ -6,6 +6,7 @@ Modern, component-based UI with VS Code Dark+ theme.
 
 import sys
 import asyncio
+import uuid
 from typing import Optional, Dict, Any
 
 from PyQt6.QtWidgets import (
@@ -222,7 +223,7 @@ class MagicGardenGUI(QMainWindow):
                 return
             user_slots = child.get("data", {}).get("userSlots", [])
             for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
+                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
                     slot["position"] = {"x": new_x, "y": new_y}
                     break
         self.game_state.update_full_state_locked(update)
@@ -240,7 +241,7 @@ class MagicGardenGUI(QMainWindow):
                 return
             user_slots = child.get("data", {}).get("userSlots", [])
             for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
+                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
                     tile_objects = slot.get("data", {}).get("garden", {}).get("tileObjects", {})
                     tile_key = str(tile_id)
                     if tile_key in tile_objects:
@@ -269,7 +270,7 @@ class MagicGardenGUI(QMainWindow):
                 return
             user_slots = child.get("data", {}).get("userSlots", [])
             for slot in user_slots:
-                if slot and slot.get("playerId") == player_id:
+                if slot and (slot.get("userId") or slot.get("playerId")) == player_id:
                     tile_objects = slot.get("data", {}).get("garden", {}).get("tileObjects", {})
                     if is_egg:
                         # Add egg placeholder
@@ -439,26 +440,26 @@ class MagicGardenGUI(QMainWindow):
         if tile_obj:
             obj_type = tile_obj.get("objectType")
             if obj_type == "plant":
-                # Harvest the plant
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
+                # Harvest the plant (QuinoaCommand envelope; cropItemId is a
+                # client-generated UUID in v2036).
+                command = {
                     "type": "HarvestCrop",
                     "slot": tile_id,
                     "slotsIndex": 0,
+                    "cropItemId": str(uuid.uuid4()),
                 }
                 print(f"Harvesting tile {tile_id}")
                 self._optimistic_harvest(tile_id)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
+                asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
             elif obj_type == "egg":
-                # Hatch the egg
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
+                # Hatch the egg (QuinoaCommand envelope)
+                command = {
                     "type": "HatchEgg",
                     "slot": tile_id,
                 }
                 print(f"Hatching egg on tile {tile_id}")
                 self._optimistic_harvest(tile_id)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
+                asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
             else:
                 print(f"Unknown object type on tile: {obj_type}")
         else:
@@ -467,24 +468,24 @@ class MagicGardenGUI(QMainWindow):
             selected_egg = self.inventory_panel.get_selected_egg()
 
             if selected_seed:
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
+                command = {
                     "type": "PlantSeed",
                     "slot": tile_id,
                     "species": selected_seed,
                 }
                 print(f"Planting {selected_seed} on tile {tile_id}")
                 self._optimistic_plant(tile_id, selected_seed, is_egg=False)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
+                asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
             elif selected_egg:
-                message = {
-                    "scopePath": ["Room", "Quinoa"],
-                    "type": "PlantEgg",
+                # Renamed server-side: the old "PlantEgg" is now "GrowEgg"
+                # (same fields: slot + eggId), wrapped in a QuinoaCommand (v2036).
+                command = {
+                    "type": "GrowEgg",
                     "slot": tile_id,
                     "eggId": selected_egg,
                 }
                 print(f"Planting egg {selected_egg} on tile {tile_id}")
                 self._optimistic_plant(tile_id, selected_egg, is_egg=True)
-                asyncio.run_coroutine_threadsafe(client.send(message), loop)
+                asyncio.run_coroutine_threadsafe(client.send_command(command), loop)
             else:
                 print("No seed or egg selected - click one in the Inventory tab first")

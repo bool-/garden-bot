@@ -5,11 +5,15 @@ Handles finding, harvesting, and replanting crops automatically.
 """
 
 import asyncio
+import random
 import time
+import uuid
 from typing import Optional, Tuple, Dict, Any
 
 from game_state import GameState
 from config import HarvestConfig
+from utils.constants import INVENTORY_CAPACITY
+from automation.movement import walk_to_tile, tile_to_server, current_position, distance, go_to_sell, go_home
 
 
 async def find_harvestable_plant(
@@ -79,28 +83,23 @@ async def harvest_and_replant(
 
     print(f"Found harvestable {species} at slot {tile_slot}")
 
-    # Harvest the crop
-    harvest_message = {
-        "scopePath": ["Room", "Quinoa"],
-        "type": "HarvestCrop",
-        "slot": tile_slot,
-        "slotsIndex": slots_index,
-    }
-    await client.send(harvest_message)
-    print(f"Harvested {species} from slot {tile_slot}")
+    if not await walk_to_tile(client, client.game_state, tile_slot):
+        return False
 
-    # Wait a moment for the harvest to process
-    await asyncio.sleep(0.3)
-
-    # Replant the same species
-    plant_message = {
-        "scopePath": ["Room", "Quinoa"],
-        "type": "PlantSeed",
-        "slot": tile_slot,
-        "species": species,
-    }
-    await client.send(plant_message)
-    print(f"Replanted {species} in slot {tile_slot}")
+    # Harvest the crop. The current protocol (v2036) wraps the action in a
+    # QuinoaCommand, requires a client-generated cropItemId, and carries the
+    # auto-replant species as the top-level successorItemId (matching how the
+    # real client harvests-and-replants in a single command).
+    await client.send_command(
+        {
+            "type": "HarvestCrop",
+            "slot": tile_slot,
+            "slotsIndex": slots_index,
+            "cropItemId": str(uuid.uuid4()),
+        },
+        successorItemId=species,
+    )
+    print(f"Harvested and replanted {species} at slot {tile_slot}")
 
     return True
 
@@ -172,15 +171,32 @@ async def find_and_harvest(
     if not harvestable_plants:
         return False
 
+    # Skip plants we already harvested whose removal the server hasn't sent yet.
+    recent = getattr(client, "_recent_harvests", set())
+    harvestable_plants = [
+        p for p in harvestable_plants if (p["tile_id"], p["slot_index"]) not in recent
+    ]
+    if not harvestable_plants:
+        return False
+
+    # A person harvests whatever is closest next; walk order follows position.
+    here = current_position(client.game_state)
+    slot_index = client.game_state.get_user_slot_index()
+
+    def walk_cost(p):
+        there = tile_to_server(p["tile_id"], slot_index)
+        return distance(here, there) if here and there else 0
+
     # Sort based on mode
     if mode == "lowest":
         # Sort by lowest mutation count first (for pet feeding)
-        harvestable_plants.sort(key=lambda x: x["mutation_count"])
+        harvestable_plants.sort(key=lambda x: (x["mutation_count"], walk_cost(x)))
         priority_msg = "lowest"
     else:
         # Sort by highest mutation count first (for auto-harvesting/selling)
-        harvestable_plants.sort(key=lambda x: x["mutation_count"], reverse=True)
-        priority_msg = "highest"
+        # Every eligible plant gets harvested this pass, so go nearest-first.
+        harvestable_plants.sort(key=lambda x: (walk_cost(x), -x["mutation_count"]))
+        priority_msg = "nearest"
 
     # Get the best match based on priority
     chosen_plant = harvestable_plants[0]
@@ -192,119 +208,125 @@ async def find_and_harvest(
         f"Found harvestable {species} at tile {tile_slot}, slot {slots_index} (mutations: {mutation_count}, priority: {priority_msg})"
     )
 
-    # Harvest the crop
-    harvest_message = {
-        "scopePath": ["Room", "Quinoa"],
-        "type": "HarvestCrop",
-        "slot": tile_slot,
-        "slotsIndex": slots_index,
-    }
-    await client.send(harvest_message)
-    print(f"Harvested {species} from tile {tile_slot}, slot {slots_index}")
+    if inventory_full(client.game_state):
+        return False
 
-    # Wait a moment for the harvest to process
-    await asyncio.sleep(0.3)
+    # Walk onto the plant first, like a player using click-to-move.
+    if not await walk_to_tile(client, client.game_state, tile_slot):
+        return False
 
-    # Only replant if specified (perennial plants like Bamboo/Sunflower don't need replanting)
-    if should_replant:
-        plant_message = {
-            "scopePath": ["Room", "Quinoa"],
-            "type": "PlantSeed",
+    # Harvest the crop (QuinoaCommand envelope). The replant species is carried
+    # as the top-level successorItemId; omit it entirely to not replant
+    # (perennial plants like Bamboo/Sunflower).
+    harvest_extra = {"successorItemId": species} if should_replant else {}
+    await client.send_command(
+        {
+            "type": "HarvestCrop",
             "slot": tile_slot,
-            "species": species,
-        }
-        await client.send(plant_message)
-        print(f"Replanted {species} in slot {tile_slot}")
+            "slotsIndex": slots_index,
+            "cropItemId": str(uuid.uuid4()),
+        },
+        **harvest_extra,
+    )
+    if not hasattr(client, "_recent_harvests"):
+        client._recent_harvests = set()
+    client._recent_harvests.add((tile_slot, slots_index))
+    print(
+        f"Harvested {species} from tile {tile_slot}, slot {slots_index}"
+        + (" (replanting)" if should_replant else "")
+    )
 
     return True
+
+
+def inventory_full(game_state) -> bool:
+    slot = game_state.get_player_slot() or {}
+    items = (((slot.get("data") or {}).get("inventory") or {}).get("items")) or []
+    return len(items) >= INVENTORY_CAPACITY
+
+
+async def _sell_crops(client, game_state):
+    # "Sell" button -> crop stand -> "Sell crops" -> "Garden"
+    await go_to_sell(client, game_state)
+    await asyncio.sleep(random.uniform(0.6, 1.5))
+    await client.send_command({"type": "SellAllCrops"})
+    print("Sold all crops")
+    await asyncio.sleep(random.uniform(0.8, 1.8))
+    await go_home(client, game_state)
+    # give the server a moment to push the emptied inventory
+    await asyncio.sleep(random.uniform(1.0, 2.0))
+
+
+async def _harvest_pass(client, game_state: GameState, config: HarvestConfig, slot_data) -> bool:
+    """One pass: walk to and harvest every eligible plant, then (optionally) sell."""
+    harvested_any = False
+    for species in config.species_to_harvest:
+        should_replant = species in config.species_to_replant
+
+        # Keep harvesting this species until no more are ready
+        while True:
+            try:
+                success = await find_and_harvest(
+                    client,
+                    slot_data,
+                    species,
+                    mode="highest",
+                    min_mutations=config.min_mutations,
+                    should_replant=should_replant,
+                )
+            except Exception as e:
+                print(f"Error harvesting {species}: {e}")
+                break  # Move to next species on error
+
+            if not success:
+                if inventory_full(game_state):
+                    if config.sell_after_harvest:
+                        await _sell_crops(client, game_state)
+                        player_slot = game_state.get_player_slot()
+                        slot_data = (player_slot or {}).get("data") or {}
+                        if slot_data and not inventory_full(game_state):
+                            continue
+                    print("Inventory full (100/100); stopping harvest until there's room")
+                    return harvested_any
+                break  # No more plants of this species ready
+            harvested_any = True
+            # Short, uneven pause before heading to the next plant
+            await asyncio.sleep(random.uniform(0.2, 0.9))
+            player_slot = game_state.get_player_slot()
+            if not player_slot:
+                break
+            slot_data = player_slot.get("data", {})
+
+    # New pass next time: the server state has caught up by then.
+    if hasattr(client, "_recent_harvests"):
+        client._recent_harvests.clear()
+
+    if harvested_any and config.sell_after_harvest:
+        try:
+            await _sell_crops(client, game_state)
+        except Exception as e:
+            print(f"Error selling crops: {e}")
+    return harvested_any
 
 
 async def run_auto_harvest(client, game_state: GameState, config: HarvestConfig):
     """
     Auto-harvest task that runs periodically.
 
-    Monitors the garden and automatically harvests/replants crops
-    that meet the minimum mutation requirements.
-
-    Args:
-        client: MagicGardenClient instance
-        game_state: Global game state
-        config: Harvest configuration
+    Monitors the garden and walks to and harvests crops that meet the
+    minimum mutation requirements. Holds client.body_lock for each pass so
+    shop trips and pet feeding never interleave with a walk.
     """
     try:
         # Wait a bit before starting to allow game state to load
         await asyncio.sleep(15)
 
         while True:
-            # Check if auto-harvest is enabled
-            if not config.enabled:
-                await asyncio.sleep(config.check_interval_seconds)
-                continue
-
-            # Get player slot data
-            player_slot = game_state.get_player_slot()
-            if not player_slot:
-                await asyncio.sleep(config.check_interval_seconds)
-                continue
-
-            slot_data = player_slot.get("data", {})
-            if not slot_data:
-                await asyncio.sleep(config.check_interval_seconds)
-                continue
-
-            # Track if we harvested anything this cycle
-            harvested_any = False
-
-            # Try to harvest each configured species
-            for species in config.species_to_harvest:
-                # Determine if this species should be replanted
-                should_replant = species in config.species_to_replant
-
-                # Keep harvesting this species until no more are ready
-                while True:
-                    try:
-                        # Use mode="highest" to prioritize highest mutation count for selling
-                        success = await find_and_harvest(
-                            client,
-                            slot_data,
-                            species,
-                            mode="highest",
-                            min_mutations=config.min_mutations,
-                            should_replant=should_replant
-                        )
-
-                        if success:
-                            harvested_any = True
-                            # Wait a bit between harvests to appear more human-like
-                            await asyncio.sleep(1.0)
-
-                            # Refresh slot data after harvest to find more plants
-                            player_slot = game_state.get_player_slot()
-                            if player_slot:
-                                slot_data = player_slot.get("data", {})
-                            else:
-                                break  # Can't continue without slot data
-                        else:
-                            # No more plants of this species ready to harvest
-                            break
-
-                    except Exception as e:
-                        print(f"Error harvesting {species}: {e}")
-                        break  # Move to next species on error
-
-            # If we harvested anything, sell all crops
-            if harvested_any:
-                try:
-                    sell_message = {
-                        "scopePath": ["Room", "Quinoa"],
-                        "type": "SellAllCrops"
-                    }
-                    await client.send(sell_message)
-                    print("Sold all harvested crops")
-                except Exception as e:
-                    print(f"Error selling crops: {e}")
-
-            # Wait before next check
+            player_slot = game_state.get_player_slot() if config.enabled else None
+            slot_data = (player_slot or {}).get("data") or {}
+            if slot_data:
+                async with client.body_lock:
+                    await _harvest_pass(client, game_state, config, slot_data)
             await asyncio.sleep(config.check_interval_seconds)
 
     except asyncio.CancelledError:
