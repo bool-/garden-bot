@@ -59,6 +59,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         "journal": ("journal_enabled", bool),
         "journal_tiles": ("journal_tiles", int),
         "focus": ("focus", str),
+        "buy_event_shops": ("buy_event_shops", bool),
     }
     DEFAULTS = {
         "min_coins_to_keep": 0, "buy_shops": ["seed", "egg"], "hold_for_gold_min_base_price": 100_000,
@@ -66,7 +67,7 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
         "harvest_batch": 12, "never_plant": [], "never_harvest": [], "tools_to_buy": [], "egg_tiles": 8,
         "big_egg_share": 0.25, "cheap_crop_value": 10_000, "never_hatch": [], "sell_original_pets": False,
         "spare_granters_to_keep": 2, "sell_pets_when_count": 4, "upgrade_when_better_by": 10,
-        "upgrades_per_tick": 3, "journal": True, "journal_tiles": 6, "focus": "journal_then_profit",
+        "upgrades_per_tick": 3, "journal": True, "journal_tiles": 6, "focus": "journal_then_profit", "buy_event_shops": True,
     }
 
     def _apply_cfg(self, cfg: Dict[str, Any]):

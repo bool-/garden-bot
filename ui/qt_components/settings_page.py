@@ -49,6 +49,8 @@ GROUPS = [
         ("shop", "seed", "Seed stall", "Buy every seed left at each restock"),
         ("shop", "egg", "Egg stall", "Buy every egg left at each restock"),
         ("shop", "tool", "Tool stall", "Only tools the bot uses; never buildings or one-use items"),
+        ("toggle", "buy_event_shops", "Event stalls",
+         "Weather shops (Rain, Snow, Dawn, Amber, Thunder) and Spooky while their event is on"),
         ("num", "min_coins_to_keep", "Never spend below",
          "Coins the bot keeps no matter what", 1_000_000, 0, 1_000_000_000_000, _coins, 1),
     ]),

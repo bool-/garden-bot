@@ -1830,6 +1830,28 @@
     ]
    }
   },
+  "weather": {
+   "zone": {
+    "x": [
+     48,
+     52
+    ],
+    "y": [
+     28,
+     31
+    ]
+   },
+   "stand": {
+    "x": [
+     48,
+     52
+    ],
+    "y": [
+     28,
+     31
+    ]
+   }
+  },
   "sellPet": {
    "zone": {
     "x": [
@@ -1853,7 +1875,8 @@
    }
   }
  },
- "build": "2078",
- "extractedAt": 1794982411,
+ "build": "2082",
+ "schema": 2,
+ "extractedAt": 1795045553,
  "_source": "Extracted automatically from the magicgarden.gg web client by automation/gamedata.py. Do not hand-edit; it is rewritten on every new build."
 }

@@ -23,10 +23,26 @@ class ShoppingMixin:
             owned |= {o.get("decorId") for o in objs.values() if o and o.get("decorId")}
         return owned
 
+    # Shop key -> stall the player stands at. Event shops only stock while
+    # their weather (or the Spooky season) is on; the weather stall serves
+    # whichever weather shop is active.
+    STALL_FOR = {"seed": "seed", "egg": "egg", "tool": "tool", "decor": "decor",
+                 "rain": "weather", "snow": "weather", "dawn": "weather", "amber": "weather",
+                 "thunder": "weather", "spooky": "spooky"}
+    EVENT_SHOPS = ("rain", "snow", "dawn", "amber", "thunder", "spooky")
+
+    def _shop_keys(self):
+        keys = list(self.shops)
+        if self.buy_event_shops:
+            keys += [k for k in self.EVENT_SHOPS if k not in keys]
+        return keys
+
     def _shopping_list(self, s) -> Dict[str, List[Tuple[dict, int]]]:
         wanted: Dict[str, List[Tuple[dict, int]]] = {}
         coins = s["coins"]
-        for shop_key in self.shops:
+        for shop_key in self._shop_keys():
+            if self.STALL_FOR.get(shop_key) not in eco.STALLS:
+                continue  # no stall for it on this map (e.g. Spooky out of season)
             shop = s["shops"].get(shop_key) or {}
             restock = shop.get("restockId")
             if not restock:
@@ -46,18 +62,20 @@ class ShoppingMixin:
                     continue
                 if (shop_key, key) in self._unbuyable or (shop_key, restock) in self._bought_restocks:
                     continue
-                if (shop_key == "seed" and eco.CROPS.get(key, {}).get("webUnavailable")) or (
-                        shop_key == "egg" and eco.EGGS.get(key, {}).get("webUnavailable")):
+                kind = entry.get("itemType")
+                if (kind == "Seed" and eco.CROPS.get(key, {}).get("webUnavailable")) or (
+                        kind == "Egg" and eco.EGGS.get(key, {}).get("webUnavailable")):
                     continue  # not sold to web clients; the server would reject it
-                if shop_key == "seed":
-                    price = eco.CROPS.get(key, {}).get("seedPrice", 0)
-                    affordable = int((coins - self.min_coins) // price) if price else left
+                price = (eco.CROPS.get(key, {}).get("seedPrice", 0) if kind == "Seed"
+                         else eco.EGGS.get(key, {}).get("price", 0) if kind == "Egg" else 0)
+                if price:
+                    affordable = int((coins - self.min_coins) // price)
                     left = min(left, max(0, affordable))
                     if left <= 0:
                         continue
                     coins -= price * left
                 elif coins < max(self.min_coins, 1_000_000):
-                    continue  # eggs/tools only once the account has some money
+                    continue  # tools only once the account has some money
                 item = {k: v for k, v in entry.items() if k != "initialStock"}
                 wanted.setdefault(shop_key, []).append((item, left))
         return wanted
@@ -112,10 +130,10 @@ class ShoppingMixin:
         stall_seed = eco.STALLS["seed"]["stand"]
         await teleport(self.client, self.gs,
                        random.randint(*stall_seed["x"]), random.randint(*stall_seed["y"]))
-        order = [k for k in ("seed", "egg", "tool", "decor") if k in wanted]
+        order = [k for k in ("seed", "egg", "tool", "decor") + self.EVENT_SHOPS if k in wanted]
         total = 0
         for shop_key in order:
-            stand = eco.STALLS[shop_key]["stand"]
+            stand = eco.STALLS[self.STALL_FOR[shop_key]]["stand"]
             here = current_position(self.gs)
             if not (here and stand["x"][0] <= here[0] <= stand["x"][1] and stand["y"][0] <= here[1] <= stand["y"][1]):
                 await walk_to(self.client, self.gs, random.randint(*stand["x"]), random.randint(*stand["y"]))
@@ -123,18 +141,16 @@ class ShoppingMixin:
             await self._send({"scopePath": SCOPE, "type": "SetPlayerInteraction", "interaction": shop_key})
             await asyncio.sleep(random.uniform(0.9, 1.8))
             for item, count in wanted[shop_key]:
-                for _ in range(count):
-                    if not self.client.is_connected:
-                        return True
-                    await self.client.send_command(
-                        {"type": "PurchaseShopItem", "shop": shop_key, "viewMode": "grid", "item": item}
-                    )
-                    total += 1
-                    await asyncio.sleep(random.uniform(0.25, 0.75))
-                    self._learn_rejections()
-                    key = item.get("species") or item.get("eggId") or item.get("toolId") or item.get("decorId")
-                    if (shop_key, key) in self._unbuyable:
-                        break  # refused: don't keep trying it this trip
+                if not self.client.is_connected:
+                    return True
+                # "Buy all": one purchase for the whole stack, like the shop's button.
+                cmd = {"type": "PurchaseShopItem", "shop": shop_key, "viewMode": "grid", "item": item}
+                if count > 1:
+                    cmd["quantity"] = count
+                await self.client.send_command(cmd)
+                total += count
+                await asyncio.sleep(random.uniform(0.4, 1.0))
+                self._learn_rejections()
                 await asyncio.sleep(random.uniform(0.3, 0.9))
             await self._send({"scopePath": SCOPE, "type": "SetPlayerInteraction", "interaction": None})
             await asyncio.sleep(random.uniform(0.4, 1.0))

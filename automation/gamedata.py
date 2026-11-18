@@ -30,6 +30,9 @@ BUNDLED_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", 
 DATA_PATH = os.environ.get("GAME_DATA_PATH") or BUNDLED_PATH
 SITE = "https://magicgarden.gg"
 MAX_CHUNKS = 250
+# Bump when extract() gains fields the bot relies on: a cached file with an
+# older schema is re-extracted even if the game build hasn't changed.
+SCHEMA = 2
 
 
 # ------------------------------------------------------------------ fetching
@@ -200,6 +203,9 @@ def extract(sources: Dict[str, str]) -> dict:
         "tool": stall("toolShop", "tool"),
         "decor": stall("decorShop", "decor"),
         "sellCrops": stall("sellCropsShop"),
+        # One stall sells whichever weather event's shop is active right now.
+        "weather": stall("weatherShop"),
+        "spooky": stall("spookyShop"),
         # no spawn layer for the pet stall: stand on its row nearest the crop stand
         "sellPet": stall("sellPetShop", stand_row=lambda z: z["y"][1]),
     }
@@ -240,7 +246,7 @@ def ensure_current(room: str, force: bool = False) -> dict:
     except Exception as e:
         print(f"[gamedata] could not read the live build ({e}); using cached data")
         return cached
-    if not force and build and cached.get("build") == build:
+    if not force and build and cached.get("build") == build and cached.get("schema", 1) >= SCHEMA:
         return cached
     print(f"[gamedata] build {build} (cached: {cached.get('build')}) - extracting game tables...")
     try:
@@ -253,6 +259,7 @@ def ensure_current(room: str, force: bool = False) -> dict:
         print(f"[gamedata] extraction looked incomplete {counts}; keeping cached data")
         return cached
     fresh["build"] = build
+    fresh["schema"] = SCHEMA
     fresh["extractedAt"] = int(time.time())
     fresh["_source"] = ("Extracted automatically from the magicgarden.gg web client by automation/gamedata.py. "
                         "Do not hand-edit; it is rewritten on every new build.")
