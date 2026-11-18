@@ -18,6 +18,9 @@ from typing import Any, Dict, Optional
 
 FAST_POLL_S = 1.0
 SLOW_POLL_S = 5.0
+BURST_POLL_S = 0.2   # right after an action, until the server confirms it
+BURST_FOR_S = 4.0
+OPTIMISTIC_TTL_S = 10.0  # unconfirmed optimistic values roll back after this
 
 
 class RemoteSource:
@@ -30,6 +33,7 @@ class RemoteSource:
         self.error: Optional[str] = None
         self.fast = True  # set by the window: focused -> poll fast
         self._etag: Optional[str] = None
+        self._burst_until = 0.0
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -71,11 +75,16 @@ class RemoteSource:
     def _loop(self):
         while not self._stop.is_set():
             self._poll_once()
-            self._wake.wait(FAST_POLL_S if self.fast else SLOW_POLL_S)
+            if time.time() < self._burst_until:
+                delay = BURST_POLL_S
+            else:
+                delay = FAST_POLL_S if self.fast else SLOW_POLL_S
+            self._wake.wait(delay)
             self._wake.clear()
 
     def control(self, **body):
-        """Fire-and-forget POST /api/control, then refresh right away."""
+        """Fire-and-forget POST /api/control, then poll fast until it lands."""
+        self._burst_until = time.time() + BURST_FOR_S
         def send():
             try:
                 with self._request("POST", "/api/control", body):
@@ -159,39 +168,56 @@ class RemoteGameState:
 
 
 class RemoteBrain:
-    """Brain look-alike: reads come from the snapshot, writes go to the API."""
+    """Brain look-alike: reads come from the snapshot, writes go to the API.
+
+    Writes are optimistic: the window shows the new value at once and keeps
+    showing it until the server's snapshot agrees (or OPTIMISTIC_TTL_S passes,
+    then it rolls back to whatever the server says)."""
 
     enabled = True
 
     def __init__(self, source: RemoteSource):
         self.src = source
-        self._paused_override: Optional[bool] = None
+        self._paused: Optional[tuple] = None          # (value, set_at)
+        self._settings: Dict[str, tuple] = {}         # key -> (value, set_at)
+        self._queued: list = []                        # (set_at, text) shown in Activity
 
     def _b(self) -> Dict[str, Any]:
         return self.src.snapshot().get("brain") or {}
 
+    @staticmethod
+    def _fresh(set_at: float) -> bool:
+        return time.time() - set_at < OPTIMISTIC_TTL_S
+
     @property
     def paused(self) -> bool:
-        if self._paused_override is not None:
-            return self._paused_override
-        return bool(self._b().get("paused"))
+        server = bool(self._b().get("paused"))
+        if self._paused is not None:
+            value, at = self._paused
+            if value == server or not self._fresh(at):
+                self._paused = None  # confirmed (or gave up)
+            else:
+                return value
+        return server
 
     @paused.setter
     def paused(self, value: bool):
-        self._paused_override = bool(value)  # show it at once; the server confirms
+        self._paused = (bool(value), time.time())
         self.src.control(paused=bool(value))
-        threading.Timer(3.0, self._clear_override).start()
-
-    def _clear_override(self):
-        self._paused_override = None
 
     @property
     def action(self):
+        if self._paused is not None and self._paused[0]:
+            return "paused"
         return self._b().get("action", "")
 
     @property
     def events(self):
-        return [tuple(e) for e in self._b().get("events") or []]
+        server = [tuple(e) for e in self._b().get("events") or []]
+        newest = server[-1][0] if server else 0
+        # Keep a queued note until the server logs something newer, or 15s pass.
+        self._queued = [(at, txt) for at, txt in self._queued if at > newest - 1 and time.time() - at < 15]
+        return server + [(at, txt) for at, txt in self._queued]
 
     @property
     def counters(self):
@@ -210,12 +236,24 @@ class RemoteBrain:
         return []
 
     def settings(self):
-        return dict(self._b().get("settings") or {})
+        merged = dict(self._b().get("settings") or {})
+        for key, (value, at) in list(self._settings.items()):
+            if merged.get(key) == value or not self._fresh(at):
+                del self._settings[key]  # confirmed (or gave up)
+            else:
+                merged[key] = value
+        return merged
 
     def apply_settings(self, updates: Dict[str, Any], save: bool = True):
+        now = time.time()
+        for key, value in updates.items():
+            self._settings[key] = (value, now)
         self.src.control(settings=updates)
 
     def request(self, action: str):
+        label = {"sell": "Sell now", "shop": "Shop now"}.get(action, action)
+        self._queued.append((time.time(), f"queued: {label} (runs on the bot's next loop)"))
+        self.src.revision += 1  # redraw now
         self.src.control(request=action)
 
 

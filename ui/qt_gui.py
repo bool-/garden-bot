@@ -91,7 +91,7 @@ class MagicGardenGUI(QMainWindow):
 
         self.update_timer = QTimer(self)
         self.update_timer.timeout.connect(self.update_ui)
-        self.update_timer.start(1000)
+        self.update_timer.start(250)  # cheap: full redraws only when something changed
         self._last_key = None
         self._last_full = 0.0
 
@@ -179,8 +179,15 @@ class MagicGardenGUI(QMainWindow):
         brain = self.client_holder.get("brain")
         client = self.client_holder.get("client")
         rev = self.game_state.get_revision() if hasattr(self.game_state, "get_revision") else time.time()
-        b = (getattr(brain, "paused", None), getattr(brain, "action", None),
-             len(getattr(brain, "events", ()) or ())) if brain is not None else None
+        if brain is not None:
+            events = getattr(brain, "events", ()) or ()
+            settings = getattr(brain, "settings", None)
+            b = (getattr(brain, "paused", None), getattr(brain, "action", None), len(events),
+                 events[-1][0] if events else 0,
+                 tuple(sorted((settings() if callable(settings) else {}).items(), key=lambda kv: kv[0]))
+                 if hasattr(brain, "src") else None)
+        else:
+            b = None
         c = (getattr(client, "is_connected", None), getattr(client, "command_ok", None)) if client else None
         return (rev, b, c, self.pages.currentIndex())
 
