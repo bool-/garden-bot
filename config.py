@@ -453,3 +453,22 @@ def save_cookies(cookies: str):
             json.dump(config, f, indent=2)
     except Exception:
         pass
+
+
+def save_brain_settings(updates: dict):
+    """Merge brain setting changes from the UI into bot_config.json."""
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        else:
+            config = {}
+        brain = config.get("brain") or {}
+        brain.update(updates)
+        config["brain"] = brain
+        tmp = CONFIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        os.replace(tmp, CONFIG_FILE)
+    except Exception as e:
+        print(f"Could not save settings: {e}")

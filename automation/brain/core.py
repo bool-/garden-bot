@@ -14,40 +14,101 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
     def __init__(self, client, game_state, cfg: Dict[str, Any]):
         self.client = client
         self.gs = game_state
-        self.cfg = cfg
-        self.min_coins = int(cfg.get("min_coins_to_keep", 0))
-        self.shops = list(cfg.get("buy_shops", ["seed", "egg", "tool"]))
-        self.hold_min_base = int(cfg.get("hold_for_gold_min_base_price", 100_000))
-        self.food_tiles_per_pet = int(cfg.get("food_tiles_per_pet", 2))
-        self.sell_at_produce = int(cfg.get("sell_when_produce_count", 20))
-        self.sell_at_value = int(cfg.get("sell_when_value_over", 5_000_000))
-        self.harvest_batch = int(cfg.get("harvest_batch", 12))
-        self.never_plant = set(cfg.get("never_plant", []))
-        self.never_harvest = set(cfg.get("never_harvest", []))
+        self.cfg = dict(cfg)
+        self._apply_cfg(self.cfg)
         # Read by the UI (another thread): plain attributes, replaced not mutated.
         self.paused = False
         self.action = "starting"
         self.events = collections.deque(maxlen=200)  # (epoch seconds, text)
         self.counters = collections.Counter()
         self.last_plan: Dict[str, Any] = {}
+        self.requests = collections.deque()  # one-off actions queued by the UI ("sell", "shop")
         self._pending_harvest = set()  # (tile, slotIndex) sent, not yet removed by server
         self._bought_restocks = set()  # (shop, restockId) we already shopped
-        self.tools_to_buy = set(cfg.get("tools_to_buy", []))
-        self.egg_tiles = int(cfg.get("egg_tiles", 8))
-        self.big_egg_share = float(cfg.get("big_egg_share", 0.25))
-        self.cheap_crop_value = int(cfg.get("cheap_crop_value", 10_000))
-        self.never_hatch = set(cfg.get("never_hatch", []))
-        self.sell_original_pets = bool(cfg.get("sell_original_pets", False))
-        self.spare_granters = int(cfg.get("spare_granters_to_keep", 2))
-        self.sell_pets_at = int(cfg.get("sell_pets_when_count", 4))
-        self.upgrade_factor = float(cfg.get("upgrade_when_better_by", 10))
-        self.upgrade_per_tick = int(cfg.get("upgrades_per_tick", 3))
-        self._original_pets = None
-        self.journal_enabled = bool(cfg.get("journal", True))
-        self.journal_tiles = int(cfg.get("journal_tiles", 6))
+        self._original_pets = None  # ids of pets the account had when the bot started
         self._journal_pending = set()  # (species, variant) logged, not yet in server state
-        self._data_build = str(eco.GAME.get("build"))  # ids of pets the account had when the bot started
+        self._data_build = str(eco.GAME.get("build"))
         self._unbuyable = self._load_unbuyable()  # (shop, item key) the server rejected
+
+    # ------------------------------------------------------------- settings
+    # Every setting the UI can edit: config key -> (attribute, type).
+    SETTINGS = {
+        "min_coins_to_keep": ("min_coins", int),
+        "buy_shops": ("shops", list),
+        "hold_for_gold_min_base_price": ("hold_min_base", int),
+        "food_tiles_per_pet": ("food_tiles_per_pet", int),
+        "sell_when_produce_count": ("sell_at_produce", int),
+        "sell_when_value_over": ("sell_at_value", int),
+        "harvest_batch": ("harvest_batch", int),
+        "never_plant": ("never_plant", set),
+        "never_harvest": ("never_harvest", set),
+        "tools_to_buy": ("tools_to_buy", set),
+        "egg_tiles": ("egg_tiles", int),
+        "big_egg_share": ("big_egg_share", float),
+        "cheap_crop_value": ("cheap_crop_value", int),
+        "never_hatch": ("never_hatch", set),
+        "sell_original_pets": ("sell_original_pets", bool),
+        "spare_granters_to_keep": ("spare_granters", int),
+        "sell_pets_when_count": ("sell_pets_at", int),
+        "upgrade_when_better_by": ("upgrade_factor", float),
+        "upgrades_per_tick": ("upgrade_per_tick", int),
+        "journal": ("journal_enabled", bool),
+        "journal_tiles": ("journal_tiles", int),
+    }
+    DEFAULTS = {
+        "min_coins_to_keep": 0, "buy_shops": ["seed", "egg"], "hold_for_gold_min_base_price": 100_000,
+        "food_tiles_per_pet": 2, "sell_when_produce_count": 20, "sell_when_value_over": 5_000_000,
+        "harvest_batch": 12, "never_plant": [], "never_harvest": [], "tools_to_buy": [], "egg_tiles": 8,
+        "big_egg_share": 0.25, "cheap_crop_value": 10_000, "never_hatch": [], "sell_original_pets": False,
+        "spare_granters_to_keep": 2, "sell_pets_when_count": 4, "upgrade_when_better_by": 10,
+        "upgrades_per_tick": 3, "journal": True, "journal_tiles": 6,
+    }
+
+    def _apply_cfg(self, cfg: Dict[str, Any]):
+        for key, (attr, kind) in self.SETTINGS.items():
+            value = cfg.get(key, self.DEFAULTS[key])
+            setattr(self, attr, kind(value))
+
+    def settings(self) -> Dict[str, Any]:
+        """Current value of every editable setting (for the UI)."""
+        return {key: self.cfg.get(key, self.DEFAULTS[key]) for key in self.SETTINGS}
+
+    def apply_settings(self, updates: Dict[str, Any], save: bool = True):
+        """Change settings live (UI thread safe: plain attribute swaps) and
+        persist them to the brain section of bot_config.json."""
+        updates = {k: v for k, v in updates.items() if k in self.SETTINGS}
+        if not updates:
+            return
+        cfg = dict(self.cfg)
+        cfg.update(updates)
+        self.cfg = cfg
+        self._apply_cfg(cfg)
+        self._log("settings: " + ", ".join(f"{k}={v}" for k, v in updates.items()))
+        if save:
+            from config import save_brain_settings
+            save_brain_settings(updates)
+
+    def request(self, action: str):
+        """Queue a one-off action from the UI: "sell" or "shop"."""
+        if action in ("sell", "shop"):
+            self.requests.append(action)
+
+    async def _handle_requests(self, s) -> bool:
+        if not self.requests:
+            return False
+        action = self.requests.popleft()
+        if action == "sell":
+            self.action = "selling (requested)"
+            if not await self.sell_if_needed(s, force=True):
+                self._log("sell now: nothing to sell")
+            return True
+        if action == "shop":
+            self.action = "shopping (requested)"
+            self._bought_restocks.clear()
+            if not await self.shop_if_restocked(s):
+                self._log("shop now: nothing left to buy this restock")
+            return True
+        return False
 
     # ------------------------------------------------------------------ state
     def _snapshot(self):
@@ -203,6 +264,8 @@ class Brain(PetsMixin, ShoppingMixin, SellingMixin, GardenMixin, EggsMixin, Jour
                  "harvest_valuable_step": "harvesting", "plant_step": "planting",
                  "upgrade_step": "upgrading tiles", "harvest_cheap_step": "harvesting cheap crops",
                  "journal_step": "logging journal"}
+        if await self._handle_requests(s):
+            return True
         for step in (self.care_for_pets, self.improve_team_step, self.journal_step,
                      self.shop_if_restocked, self.sell_if_needed, self.sell_pets_step, self.hatch_step,
                      self.harvest_valuable_step, self.plant_step, self.upgrade_step,

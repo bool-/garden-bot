@@ -202,3 +202,4 @@ $RECYCLE.BIN/
 *.swo
 bot_state.json
 brain*.out
+gui_run.out
